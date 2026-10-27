@@ -23,6 +23,10 @@ interface ClipboardDao {
     @Query("UPDATE ${ClipboardEntry.TABLE_NAME} SET timestamp=:timestamp WHERE id=:id")
     suspend fun updateTime(id: Int, timestamp: Long)
 
+    // Pinned entries keep their position: using one must not reorder the pinned group.
+    @Query("UPDATE ${ClipboardEntry.TABLE_NAME} SET timestamp=:timestamp WHERE id=:id AND pinned=0")
+    suspend fun updateTimeIfUnpinned(id: Int, timestamp: Long)
+
     @Query("UPDATE ${ClipboardEntry.TABLE_NAME} SET originalText=:originalText WHERE id=:id AND originalText=''")
     suspend fun updateOriginalTextIfEmpty(id: Int, originalText: String)
 
