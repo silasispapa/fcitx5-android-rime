@@ -20,6 +20,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.data.InputFeedbacks
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
+import kotlin.math.abs
 
 open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
 
@@ -74,16 +75,19 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
     /**
      * 按下后多久（毫秒）才开始计算划动；为 null 或 0 时立即计算。
      *
-     * 延迟内的位移直接丢弃（基准点跟着手指走），不计数、不取消长按，所以快速短按
-     * 即使手指滚动带出位移，抬手仍是普通点击。目前只给空格光标模式用。
+     * 延迟内的位移不计数，所以快速短按即使手指滚动带出位移，抬手仍是普通点击。
+     * 但只要离按下点超过一格阈值，就照常取消长按/重复计时：否则延迟接近长按时间时
+     * 长按会先触发，划动永远进不来。目前只给空格光标模式用。
      */
     var swipeStartDelay: (() -> Int)? = null
 
     /**
-     * 本视图自己收到 ACTION_DOWN 的时刻。不能用 `event.downTime`：多指时拆分出的事件
-     * （以及 vivo 兼容路径合成的事件）带的是第一根手指的按下时间。
+     * 本视图自己收到 ACTION_DOWN 的时刻与位置。不能用 `event.downTime`：多指时拆分出的
+     * 事件（以及 vivo 兼容路径合成的事件）带的是第一根手指的按下时间。
      */
     private var pressDownTime = 0L
+    private var pressDownX = 0f
+    private var pressDownY = 0f
 
     /**
      * 按住后滑动模式（候选词手势专用）。
@@ -206,6 +210,8 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_DOWN -> {
                 if (!isEnabled) return false
                 pressDownTime = event.eventTime
+                pressDownX = x
+                pressDownY = y
                 val longPressDelayMillis = longPressDelay.toLong()
                 drawableHotspotChanged(x, y)
                 isPressed = true
@@ -344,6 +350,12 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
                     // 起始延迟内：丢弃位移，划动从延迟结束时的位置起算
                     swipeLastX = x
                     swipeLastY = y
+                    if (
+                        abs(x - pressDownX) >= swipeThresholdX ||
+                        abs(y - pressDownY) >= swipeThresholdY
+                    ) {
+                        cancelPendingHold()
+                    }
                     return true
                 }
                 val countX = consumeSwipe(x, SwipeAxis.X)
@@ -379,6 +391,18 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
         }
     }
 
+    /** 手指已明显移动：取消尚未触发的长按与长按重复计时。 */
+    private fun cancelPendingHold() {
+        if (longPressEnabled && !longPressTriggered) {
+            longPressJob?.cancel()
+            longPressJob = null
+        }
+        if (repeatEnabled && !repeatStarted) {
+            repeatJob?.cancel()
+            repeatJob = null
+        }
+    }
+
     private fun consumeSwipe(current: Float, axis: SwipeAxis): Int {
         val unconsumed: Float
         val threshold: Float
@@ -398,14 +422,7 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
             if (swipeRepeatEnabled && !swipeRepeatTriggered) {
                 swipeRepeatTriggered = true
             }
-            if (longPressEnabled && !longPressTriggered) {
-                longPressJob?.cancel()
-                longPressJob = null
-            }
-            if (repeatEnabled && !repeatStarted) {
-                repeatJob?.cancel()
-                repeatJob = null
-            }
+            cancelPendingHold()
         }
         when (axis) {
             SwipeAxis.X -> {
