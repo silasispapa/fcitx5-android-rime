@@ -35,7 +35,7 @@ import org.mechdancer.dependency.manager.must
  * 因此这里用普通窗口：窗口切换时工具栏不做任何形态切换，仍显示 `IdleUi`（主键盘工具栏），
  * 再由 `KawaiiBarComponent` 通过 `IdleUi.setBackToKeyboardMode` 只替换最左图标。
  *
- * 面板自身的键盘级操作（返回键盘 / 退格）只有左栏底部两枚键，见 [SymbolPanelUi]；
+ * 面板自身的键盘级操作（返回键盘 / 退格）只有底栏两端两枚键，见 [SymbolPanelUi]；
  * **面板之间的跳转不在这里**，由布局按键或宏配置（见 [Key.layerTargetNames]）。
  */
 class PickerWindow(

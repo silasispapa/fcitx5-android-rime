@@ -38,44 +38,28 @@ import splitties.dimensions.dp
 import splitties.views.dsl.core.Ui
 
 /**
- * Foxy 风格的符号 / 表情 / 颜文字面板。
- *
- * 布局模型取自 Foxy 输入法（`com.fxliang.foxy` 的 `ly` 视图）：
+ * 符号 / 表情 / 颜文字面板，Gboard 式布局：
  *
  * ```
- * ┌────────┬──────────────────────────────┐
- * │ 分组栏  │  符号网格（可纵向滚动）        │
- * │ (纵向)  │  每行 N 个                    │
- * │  最近   │                              │
- * │  标点   │                              │
- * │  ...   │                              │
- * ├────────┤                              │
- * │  ⌨  ⌫  │                              │
- * └────────┴──────────────────────────────┘
+ * ┌──────────────────────────────────────────┐
+ * │  符号网格（可纵向滚动），每行 N 个           │
+ * ├────┬──────────────────────────────┬──────┤
+ * │ ⌨  │ 最近 标点 数学 …（可横向拖动）   │  ⌫   │
+ * └────┴──────────────────────────────┴──────┘
  * ```
  *
- * **面板独占整个键盘区域**，底部不再有 `ABC , 空格 . 回车` 那一整行：面板按键本身是
- * 「点一下即时上屏」，空格/回车/逗号在面板里没有意义，那行只会白白吃掉约 1/4 高度。
- * 键盘级操作只有左栏底部这两枚小键，与 Foxy 的 `ly.j` / `ly.k` 一一对应：
+ * **面板独占整个键盘区域**：面板按键是「点一下即时上屏」，不需要空格/回车那一整行。
+ * 键盘级操作只有底栏两端两枚键：
+ * - **⌨** 返回文字键盘；
+ * - **⌫** 退格删除，长按连续删除。
  *
- * - **⌨** 返回文字键盘（与 Foxy `gu.java` case 8 的 `k5("default")` 同义）；
- * - **⌫** 退格删除，长按连续删除（与 Foxy case 15 的 `wz(j30.BACKSPACE, 0)` 同义）。
+ * **面板之间的切换不在这里**，交由布局按键与宏配置（见 `PickerWindow.Key.layerTargetNames`）。
+ * 「返回键盘」在工具栏最左侧还有第二个入口（见 `IdleUi.setBackToKeyboardMode`）。
  *
- * **面板之间的切换不在这里**，而是和 Foxy 一样交由**布局按键**与**宏**配置：
- * 布局编辑器里给 LayoutSwitchKey 选 Emoji / Kaomoji 目标，或在宏里用「切层」
- * 动作指向这三个面板（见 `PickerWindow.Key.layerTargetNames`）。
+ * 网格与分组栏都用 [RecyclerView] 复用视图，避免上千个子 View 常驻内存；网格项复用
+ * [TextKeyView]，自动继承主题圆角、边框、按压高亮与字体设置，并保留长按弹出（emoji 肤色）。
  *
- * 「返回键盘」在工具栏最左侧还有第二个入口（见 `IdleUi.setBackToKeyboardMode`）：
- * 主键盘工具栏原样保留、只换最左图标。
- *
- * 与 Foxy 的差异（均为有意为之）：
- * - Foxy 的 `ly.c()` 一次性把整份 catalog（符号最多 4773 条）全部 `new` 成视图；
- *   这里改用 [RecyclerView] 复用视图，避免上千个子 View 常驻内存。
- * - 网格项复用本项目的 [TextKeyView]，因此自动继承主题圆角、边框、按压高亮与字体设置。
- * - 保留长按弹出（emoji 肤色）能力，Foxy 面板没有该交互。
- *
- * 列数由 [columns] 决定：符号/表情为 6 列，颜文字为 1 列（条目很长，见 Foxy 的
- * `multiLine` 语义）。
+ * 列数由 [columns] 决定：符号/表情为 6 列，颜文字为 1 列（条目很长）。
  */
 @SuppressLint("ViewConstructor")
 class SymbolPanelUi(
@@ -90,18 +74,17 @@ class SymbolPanelUi(
 ) : Ui {
 
     private companion object {
-        /** 左栏宽度与行高，对齐 Foxy 的 `b(84)` 与 `b(40)`。 */
-        const val SIDEBAR_WIDTH_DP = 84
-        const val SIDEBAR_ITEM_HEIGHT_DP = 40
-        const val UTILITY_ROW_HEIGHT_DP = 40
+        /** 底栏高度、两端功能键宽度、分组标签最小宽度。 */
+        const val BOTTOM_BAR_HEIGHT_DP = 40
+        const val UTILITY_KEY_WIDTH_DP = 56
+        const val TAB_MIN_WIDTH_DP = 48
         const val GRID_ITEM_HEIGHT_DP = 40
         /** 每个面板保留最近十行记录，颜文字面板也按单列计算。 */
         const val RECENT_ROWS = 10
 
-        /** 功能键文字大小，对齐 Foxy 的 20sp（两枚键均分 84dp，每枚 42dp）。 */
+        /** 功能键文字大小。 */
         const val UTILITY_KEY_TEXT_SIZE = 20f
 
-        /** 与 Foxy 的 `ly.j` / `ly.k` 相同的字形。 */
         const val LABEL_BACK_TO_KEYBOARD = "⌨"
         const val LABEL_BACKSPACE = "⌫"
 
@@ -192,13 +175,13 @@ class SymbolPanelUi(
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SidebarHolder {
             val label = AutoScaleTextView(ctx).apply {
                 gravity = Gravity.CENTER
-                scaleMode = AutoScaleTextView.Mode.Proportional
+                maxLines = 1
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                val h = ctx.dp(4)
-                val v = ctx.dp(2)
-                setPadding(h, v, h, v)
+                minimumWidth = ctx.dp(TAB_MIN_WIDTH_DP)
+                val h = ctx.dp(12)
+                setPadding(h, 0, h, 0)
                 layoutParams = RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(SIDEBAR_ITEM_HEIGHT_DP)
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 isClickable = true
                 isFocusable = true
@@ -234,7 +217,8 @@ class SymbolPanelUi(
 
     private val sidebarRecycler = RecyclerView(ctx).apply {
         id = View.generateViewId()
-        layoutManager = LinearLayoutManager(ctx)
+        // 分组横向排列，较多时可左右拖动
+        layoutManager = LinearLayoutManager(ctx, LinearLayoutManager.HORIZONTAL, false)
         adapter = sidebarAdapter
         itemAnimator = null
         overScrollMode = View.OVER_SCROLL_NEVER
@@ -249,7 +233,7 @@ class SymbolPanelUi(
     }
 
     /**
-     * 构造左栏底部的一个小功能键。
+     * 构造底栏两端的一个功能键。
      *
      * 复用 [TextKeyView]，因此自动继承主题的按键背景、圆角、边框、按压高亮与字体设置。
      */
@@ -287,64 +271,50 @@ class SymbolPanelUi(
         }
     }
 
-    private val utilityRow = LinearLayout(ctx).apply {
+    /** 底栏：⌨ · 分组栏（占满剩余宽度）· ⌫ */
+    private val bottomBar = LinearLayout(ctx).apply {
         orientation = LinearLayout.HORIZONTAL
-    }
-
-    /** 左栏 = 分组列表（占满剩余高度）+ 底部功能键行，宽度 84dp（同 Foxy）。 */
-    private val sidebarColumn = LinearLayout(ctx).apply {
-        orientation = LinearLayout.VERTICAL
-    }
-
-    override val root: View = LinearLayout(ctx).apply {
-        orientation = LinearLayout.HORIZONTAL
-        setBackgroundColor(theme.keyboardColor)
+        val keyLp = { LinearLayout.LayoutParams(ctx.dp(UTILITY_KEY_WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT) }
         addView(
-            sidebarColumn,
-            LinearLayout.LayoutParams(
-                ctx.dp(SIDEBAR_WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        addView(
-            gridRecycler,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        )
-    }
-
-    init {
-        sidebarColumn.addView(
-            sidebarRecycler,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        )
-        sidebarColumn.addView(
-            utilityRow,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(UTILITY_ROW_HEIGHT_DP)
-            )
-        )
-
-        // ⌨ 返回键盘 · ⌫ 删除 —— 与 Foxy 的 ly.j / ly.k 一一对应，两枚均分 84dp。
-        // 面板之间的切换不在这里：那属于布局按键/宏的配置（见类注释）。
-        val gap = ctx.dp(1)
-        val keys = listOf(
             createUtilityKey(
                 label = LABEL_BACK_TO_KEYBOARD,
                 descriptionRes = R.string.back_to_keyboard,
                 action = KeyAction.LayoutSwitchAction(TextKeyboard.Name)
             ),
+            keyLp()
+        )
+        addView(
+            sidebarRecycler,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        )
+        addView(
             createUtilityKey(
                 label = LABEL_BACKSPACE,
                 descriptionRes = R.string.backspace,
                 action = SymAction(KeySym(FcitxKeyMapping.FcitxKey_BackSpace)),
                 repeat = true
+            ),
+            keyLp()
+        )
+    }
+
+    /** 上：符号网格（占满剩余高度）；下：底栏。 */
+    override val root: View = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundColor(theme.keyboardColor)
+        addView(
+            gridRecycler,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+        addView(
+            bottomBar,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(BOTTOM_BAR_HEIGHT_DP)
             )
         )
-        keys.forEachIndexed { index, key ->
-            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-            if (index > 0) lp.marginStart = gap
-            utilityRow.addView(key, lp)
-        }
+    }
 
+    init {
         rebuild()
     }
 
@@ -390,6 +360,8 @@ class SymbolPanelUi(
         selectedIndex = index
         @Suppress("NotifyDataSetChanged")
         sidebarAdapter.notifyDataSetChanged()
+        // 点到边缘半露的标签时，把它完整滑进视野
+        sidebarRecycler.smoothScrollToPosition(index)
         applySelectedGroup()
     }
 
