@@ -369,7 +369,7 @@ class KeyboardGroupFragment : ManagedPreferenceFragment(AppPrefs.getInstance().k
                 "swipe_symbol_behavior", "keep_keyboard_letters_uppercase",
                 "reset_keyboard_on_focus_change",
                 "space_long_press_behavior", "space_key_label_mode",
-                "space_swipe_move_cursor", "show_lang_switch_key",
+                "space_swipe_move_cursor", "space_swipe_cursor_delay", "show_lang_switch_key",
             ),
             GROUP_FEEDBACK to setOf(
                 "haptic_on_keypress", "haptic_on_keyup", "haptic_on_repeat",

@@ -176,12 +176,13 @@ abstract class BaseKeyboard(
     private val swipeSymbolDirection by prefs.keyboard.swipeSymbolDirection
 
     private val spaceSwipeMoveCursor = prefs.keyboard.spaceSwipeMoveCursor
+    private val spaceSwipeCursorDelay = prefs.keyboard.spaceSwipeCursorDelay
 
     /**
      * 空格键（[SpaceKey]/[MiniSpaceKey]）注册表：视图 + 它在布局里配置的划动动作。
      *
-     * 空格键是唯一一个手势语义被设置开关接管的键：`spaceSwipeMoveCursor` 开启时横向/
-     * 纵向划动移动光标，关闭时才让位给按键在布局编辑器里配置的划动动作。两种模式互斥，
+     * 空格键是唯一一个手势语义被设置开关接管的键：`spaceSwipeMoveCursor` 开启时横向划动
+     * 移动光标，关闭时才让位给按键在布局编辑器里配置的划动动作。两种模式互斥，
      * 且**都不注册** [KeyDef.Behavior.Swipe]——通用 Swipe 绑定会把横向阈值改写成
      * `disabledSwipeThreshold`，那会直接废掉光标模式的移动（见 [createKeyView]）。
      */
@@ -202,16 +203,20 @@ abstract class BaseKeyboard(
     /**
      * 按当前开关设定空格键的两轴阈值。两种模式互斥，所以同一时刻只有一套阈值生效。
      *
-     * 光标模式用小的选择阈值（逐格移动光标）；划动模式关掉横向、纵向用常规输入阈值
+     * 光标模式横向用小的选择阈值（逐格移动光标）、纵向关闭；划动模式关掉横向、纵向用常规输入阈值
      * （与其它键的 [KeyDef.Behavior.Swipe] 一致）。
      */
     private fun applySpaceSwipeThresholds(view: KeyView) {
         if (spaceSwipeMoveCursor.getValue()) {
             view.swipeThresholdX = selectionSwipeThreshold
-            view.swipeThresholdY = selectionSwipeThreshold * 1.5f
+            // 只移横向：纵向在单行框里会把光标甩到行首/行尾，快打时极易误触
+            view.swipeThresholdY = disabledSwipeThreshold
+            // 运行时读取：设置里改延迟无需重建键盘
+            view.swipeStartDelay = { spaceSwipeCursorDelay.getValue() }
         } else {
             view.swipeThresholdX = disabledSwipeThreshold
             view.swipeThresholdY = inputSwipeThreshold
+            view.swipeStartDelay = null
         }
     }
 
@@ -1649,8 +1654,6 @@ abstract class BaseKeyboard(
                 swipeEnabled = spaceSwipeEnabledFor(swipeAction)
                 swipeRepeatEnabled = true
                 applySpaceSwipeThresholds(this)
-                // Track the locked swipe direction to avoid conflicting gestures
-                var swipeDirectionLocked: SwipeAxis? = null
                 onGestureListener = OnGestureListener { view, event ->
                     // 每次事件都重读开关：设置里切换后无需重建键盘即可生效，且复用的
                     // 缓存行也不会拿着旧模式的判断继续跑。
@@ -1662,56 +1665,25 @@ abstract class BaseKeyboard(
                                 // 这里返回 false 也保证 gestureConsumed 不被置位，抬手时
                                 // 才能看到真实的 totalX/totalY。
                                 false
+                            } else if (event.countX == 0) {
+                                false
                             } else {
-                                val countX = event.countX
-                                val countY = event.countY
-
-                                // Lock direction on first swipe
-                                if (swipeDirectionLocked == null && (countX != 0 || countY != 0)) {
-                                    swipeDirectionLocked = if (kotlin.math.abs(countX) >= kotlin.math.abs(countY)) {
-                                        SwipeAxis.X
-                                    } else {
-                                        SwipeAxis.Y
-                                    }
+                                // 光标模式只有横向：纵向阈值已关闭（见 applySpaceSwipeThresholds），
+                                // 快打时手指的纵向滚动不会再发出 Up/Down 把光标甩到行首/行尾。
+                                val sym = if (event.countX > 0) {
+                                    FcitxKeyMapping.FcitxKey_Right
+                                } else {
+                                    FcitxKeyMapping.FcitxKey_Left
                                 }
-
-                                val handled = when (swipeDirectionLocked) {
-                                    SwipeAxis.X -> {
-                                        if (countX != 0) {
-                                            val sym =
-                                                if (countX > 0) FcitxKeyMapping.FcitxKey_Right else FcitxKeyMapping.FcitxKey_Left
-                                            val action = KeyAction.SymAction(KeySym(sym), KeyStates.Virtual)
-                                            repeat(countX.absoluteValue) {
-                                                onAction(action)
-                                                if (hapticOnRepeat) InputFeedbacks.hapticFeedback(view)
-                                            }
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    SwipeAxis.Y -> {
-                                        if (countY != 0) {
-                                            val sym =
-                                                if (countY > 0) FcitxKeyMapping.FcitxKey_Down else FcitxKeyMapping.FcitxKey_Up
-                                            val action = KeyAction.SymAction(KeySym(sym), KeyStates.Virtual)
-                                            repeat(countY.absoluteValue) {
-                                                onAction(action)
-                                                if (hapticOnRepeat) InputFeedbacks.hapticFeedback(view)
-                                            }
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    null -> false
+                                val action = KeyAction.SymAction(KeySym(sym), KeyStates.Virtual)
+                                repeat(event.countX.absoluteValue) {
+                                    onAction(action)
+                                    if (hapticOnRepeat) InputFeedbacks.hapticFeedback(view)
                                 }
-                                handled
+                                true
                             }
                         }
                         GestureType.Up -> {
-                            // Reset direction lock on finger up
-                            swipeDirectionLocked = null
                             onAction(KeyAction.VoiceInputHoldEnd)
                             // 划动模式：抬手时按总位移方向触发用户配置的动作，语义与其它
                             // 键的 Behavior.Swipe 一致（一次划动只触发一次）。光标模式不触发。

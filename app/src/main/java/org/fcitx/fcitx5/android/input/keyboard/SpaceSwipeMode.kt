@@ -9,7 +9,7 @@ package org.fcitx.fcitx5.android.input.keyboard
  *
  * 空格键是唯一一个手势语义被设置开关接管的键，两种模式互斥：
  *
- * 1. **光标模式**——「划动空格键以移动光标」（`spaceSwipeMoveCursor`）开启：横向/纵向
+ * 1. **光标模式**——「划动空格键以移动光标」（`spaceSwipeMoveCursor`）开启：横向
  *    划动移动光标，按键自身配置的划动动作不生效。
  * 2. **划动动作模式**——开关关闭且按键配了划动动作：划动触发该动作。
  *

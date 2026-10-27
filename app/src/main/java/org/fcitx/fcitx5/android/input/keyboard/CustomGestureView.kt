@@ -72,6 +72,20 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
     var swipeThresholdY = 24f
 
     /**
+     * 按下后多久（毫秒）才开始计算划动；为 null 或 0 时立即计算。
+     *
+     * 延迟内的位移直接丢弃（基准点跟着手指走），不计数、不取消长按，所以快速短按
+     * 即使手指滚动带出位移，抬手仍是普通点击。目前只给空格光标模式用。
+     */
+    var swipeStartDelay: (() -> Int)? = null
+
+    /**
+     * 本视图自己收到 ACTION_DOWN 的时刻。不能用 `event.downTime`：多指时拆分出的事件
+     * （以及 vivo 兼容路径合成的事件）带的是第一根手指的按下时间。
+     */
+    private var pressDownTime = 0L
+
+    /**
      * 按住后滑动模式（候选词手势专用）。
      *
      * 与 [swipeEnabled] 互斥：本模式走自己的分支，不读 [swipeEnabled]，阈值复用
@@ -191,6 +205,7 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (!isEnabled) return false
+                pressDownTime = event.eventTime
                 val longPressDelayMillis = longPressDelay.toLong()
                 drawableHotspotChanged(x, y)
                 isPressed = true
@@ -322,6 +337,13 @@ open class CustomGestureView(ctx: Context) : FrameLayout(ctx) {
                     if (repeatStarted) {
                         onRepeatMoveListener?.invoke(this, x, y)
                     }
+                    return true
+                }
+                val startDelay = swipeStartDelay?.invoke() ?: 0
+                if (event.eventTime - pressDownTime < startDelay) {
+                    // 起始延迟内：丢弃位移，划动从延迟结束时的位置起算
+                    swipeLastX = x
+                    swipeLastY = y
                     return true
                 }
                 val countX = consumeSwipe(x, SwipeAxis.X)

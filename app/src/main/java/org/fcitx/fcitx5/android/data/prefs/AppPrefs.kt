@@ -239,6 +239,20 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         )
         val spaceSwipeMoveCursor =
             switch(R.string.space_swipe_move_cursor, "space_swipe_move_cursor", true)
+        /**
+         * 按住空格满这么久之后，划动才开始移动光标。快打时空格是短按，手指滚动带出的
+         * 微小位移会被忽略，不再误移光标、吞掉空格。0 = 立即响应（旧行为）。
+         */
+        val spaceSwipeCursorDelay = int(
+            R.string.space_swipe_cursor_delay,
+            "space_swipe_cursor_delay",
+            150,
+            0,
+            500,
+            "ms",
+            10,
+            enableUiOn = { spaceSwipeMoveCursor.getValue() }
+        )
         val showLangSwitchKey =
             switch(R.string.show_lang_switch_key, "show_lang_switch_key", true)
         val textKeyboardLayoutProfile = ManagedPreference.PString(
