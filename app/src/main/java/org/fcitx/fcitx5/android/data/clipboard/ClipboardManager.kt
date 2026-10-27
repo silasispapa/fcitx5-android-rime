@@ -448,7 +448,7 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
     suspend fun unpin(id: Int) = clbDao.updatePinStatus(id, false)
 
     suspend fun markUsed(id: Int, timestamp: Long = System.currentTimeMillis()) {
-        clbDao.updateTime(id, timestamp)
+        clbDao.updateTimeIfUnpinned(id, timestamp)
     }
 
     suspend fun updateText(id: Int, text: String) {
