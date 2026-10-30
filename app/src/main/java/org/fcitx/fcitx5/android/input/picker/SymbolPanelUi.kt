@@ -226,6 +226,7 @@ class SymbolPanelUi(
                     popupActionListener.onPopupAction(
                         PopupAction.ShowKeyboardAction(keyView.id, popup, keyView.bounds)
                     )
+                    popupKey = keyView
                     true
                 }
             }
@@ -285,6 +286,9 @@ class SymbolPanelUi(
             label.setOnClickListener { selectGroup(position) }
         }
     }
+
+    /** 正在显示长按弹窗（肤色等）的格子；弹窗期间本次触摸由 [GridTouchListener] 驱动。 */
+    private var popupKey: TextKeyView? = null
 
     private lateinit var sidebarRecycler: RecyclerView
     private lateinit var gridRecycler: RecyclerView
@@ -397,16 +401,20 @@ class SymbolPanelUi(
         adapter = gridAdapter
         itemAnimator = null
         overScrollMode = View.OVER_SCROLL_NEVER
-        addOnItemTouchListener(GroupSwipeListener())
+        addOnItemTouchListener(GridTouchListener())
     }
 
     /**
-     * 网格上左右滑动切换分组：左滑下一组，右滑上一组，两端不循环。
+     * 网格触摸：长按弹窗与左右滑动切换分组。
      *
-     * 横向位移明显大于纵向时才拦截，拦截后格子收到 CANCEL，不会误上屏；
-     * 纵向滚动已开始或长按已触发（如肤色弹窗）时本次触摸不再参与。
+     * - 弹窗出现后接管本次触摸：滑动移动焦点，抬手上屏所选项并关闭弹窗，与主键盘一致。
+     *   格子关掉了滑动手势（否则抢走纵向滚动），所以这一步只能在网格层做。
+     * - 左滑下一组，右滑上一组，两端不循环。横向位移明显大于纵向才拦截，格子收到
+     *   CANCEL 不会误上屏；纵向滚动已开始或已到长按时间时本次触摸不参与。
+     *
+     * 被拦截的那个事件不会再进 [onTouchEvent]，所以弹窗事件在两处都要处理。
      */
-    private inner class GroupSwipeListener : RecyclerView.SimpleOnItemTouchListener() {
+    private inner class GridTouchListener : RecyclerView.SimpleOnItemTouchListener() {
         private val threshold = ctx.dp(SWIPE_THRESHOLD_DP)
         private var downX = 0f
         private var downY = 0f
@@ -414,6 +422,10 @@ class SymbolPanelUi(
         private var tracking = false
 
         override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+            popupKey?.let {
+                if (e.actionMasked != MotionEvent.ACTION_DOWN) return drivePopup(it, e)
+                dismissPopup(it)
+            }
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.x
@@ -438,12 +450,37 @@ class SymbolPanelUi(
         }
 
         override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+            popupKey?.let { drivePopup(it, e); return }
             if (e.actionMasked != MotionEvent.ACTION_UP) return
             tracking = false
             val dx = e.x - downX
             if (abs(dx) < threshold) return
             val target = selectedIndex + if (dx < 0) 1 else -1
             if (target in groups.indices) selectGroup(target)
+        }
+
+        /** 坐标换算到格子内，与主键盘传给弹窗的一致。 */
+        private fun drivePopup(key: TextKeyView, e: MotionEvent): Boolean {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_MOVE -> popupActionListener.onPopupAction(
+                    PopupAction.ChangeFocusAction(key.id, e.x - key.left, e.y - key.top)
+                )
+                MotionEvent.ACTION_UP -> {
+                    val trigger = PopupAction.TriggerAction(key.id)
+                    popupActionListener.onPopupAction(trigger)
+                    trigger.outAction?.let {
+                        keyActionListener.onKeyAction(it, KeyActionListener.Source.Popup)
+                    }
+                    dismissPopup(key)
+                }
+                MotionEvent.ACTION_CANCEL -> dismissPopup(key)
+            }
+            return true
+        }
+
+        private fun dismissPopup(key: TextKeyView) {
+            popupKey = null
+            popupActionListener.onPopupAction(PopupAction.DismissAction(key.id))
         }
     }
 
@@ -666,6 +703,11 @@ class SymbolPanelUi(
         if (group != null) {
             gridRecycler.scrollToPosition(0)
         }
+    }
+
+    /** 只停下惯性滚动，不改变位置（长按弹窗要盖在原来那格上）。 */
+    fun stopScroll() {
+        gridRecycler.stopScroll()
     }
 
     fun scrollToTop() {
