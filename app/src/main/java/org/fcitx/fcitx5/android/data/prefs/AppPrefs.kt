@@ -241,6 +241,11 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         )
         val spaceSwipeMoveCursor =
             switch(R.string.space_swipe_move_cursor, "space_swipe_move_cursor", true)
+        val spaceSwipeVerticalCursor = switch(
+            R.string.space_swipe_vertical_cursor,
+            "space_swipe_vertical_cursor",
+            true
+        ) { spaceSwipeMoveCursor.getValue() }
         val showLangSwitchKey =
             switch(R.string.show_lang_switch_key, "show_lang_switch_key", true)
         val textKeyboardLayoutProfile = ManagedPreference.PString(
