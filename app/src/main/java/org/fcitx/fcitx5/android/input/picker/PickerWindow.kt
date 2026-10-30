@@ -137,7 +137,7 @@ class PickerWindow(
             when (it) {
                 is PopupAction.ShowKeyboardAction -> {
                     // 长按弹出键盘展示期间不要移动底层列表
-                    pickerLayout.symbolPanel.scrollToTop()
+                    pickerLayout.symbolPanel.stopScroll()
                 }
                 else -> {}
             }
