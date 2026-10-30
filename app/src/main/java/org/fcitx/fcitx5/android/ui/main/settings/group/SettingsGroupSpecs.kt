@@ -15,11 +15,14 @@ import org.fcitx.fcitx5.android.ui.main.settings.behavior.FontsetEditorActivity
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.KeyboardGroupFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.TextKeyboardLayoutProfileManagerActivity
 import org.fcitx.fcitx5.android.ui.main.settings.icon.IconThemeListActivity
+import org.fcitx.fcitx5.android.ui.main.update.UpdateCheckActivity
+import org.fcitx.fcitx5.android.utils.Const
 
 /** 分组内一条目的跳转目标。 */
 sealed interface SettingsGroupAction {
     data class Route(val route: SettingsRoute) : SettingsGroupAction
     data class Launch(val activityClass: Class<out Activity>) : SettingsGroupAction
+    data class Url(val url: String) : SettingsGroupAction
 }
 
 /** 分组内一条设置入口。 */
@@ -81,6 +84,7 @@ object SettingsGroupSpecs {
     const val ID_INPUT = "input"
     const val ID_APPEARANCE = "appearance"
     const val ID_CONVENIENCE = "convenience"
+    const val ID_ABOUT = "about"
 
     private val all: List<SettingsGroupSpec> = listOf(
         SettingsGroupSpec(
@@ -181,6 +185,37 @@ object SettingsGroupSpecs {
                         R.string.keyboard_category_voice,
                         R.drawable.ic_baseline_keyboard_voice_24,
                         SettingsRoute.KeyboardGroup(KeyboardGroupFragment.GROUP_VOICE)
+                    )
+                )
+            }
+        ),
+
+        SettingsGroupSpec(
+            id = ID_ABOUT,
+            title = R.string.settings_group_about,
+            summary = R.string.settings_group_about_summary,
+            icon = R.drawable.ic_baseline_info_24,
+            entries = {
+                listOf(
+                    SettingsGroupEntry.activity(
+                        R.string.direct_rime_about_builds,
+                        R.drawable.ic_baseline_sync_24,
+                        UpdateCheckActivity::class.java
+                    ),
+                    SettingsGroupEntry(
+                        R.string.faq,
+                        R.drawable.ic_baseline_help_outline_24,
+                        action = SettingsGroupAction.Url(Const.faqUrl)
+                    ),
+                    SettingsGroupEntry.route(
+                        R.string.developer,
+                        R.drawable.ic_baseline_developer_mode_24,
+                        SettingsRoute.Developer
+                    ),
+                    SettingsGroupEntry.route(
+                        R.string.about,
+                        R.drawable.ic_baseline_info_24,
+                        SettingsRoute.About
                     )
                 )
             }

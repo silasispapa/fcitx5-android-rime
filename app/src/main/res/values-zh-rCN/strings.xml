@@ -1056,6 +1056,8 @@
     <string name="settings_group_appearance">外观</string>
     <string name="settings_group_appearance_summary">主题、图标和字体</string>
     <string name="settings_group_convenience">便捷功能</string>
+    <string name="settings_group_about">关于与更新</string>
+    <string name="settings_group_about_summary">版本与更新、常见问题、开发者与关于</string>
     <string name="settings_group_convenience_summary">剪贴板、文本编辑、表情符号与语音输入</string>
     <string name="settings_group_data">数据与备份</string>
     <string name="settings_group_data_summary">导入导出用户数据、用户数据目录</string>

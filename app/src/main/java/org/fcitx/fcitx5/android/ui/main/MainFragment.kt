@@ -6,7 +6,6 @@ package org.fcitx.fcitx5.android.ui.main
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.text.TextUtils
 import android.view.View
@@ -26,8 +25,6 @@ import org.fcitx.fcitx5.android.ui.main.settings.group.SettingsGroupSpecs
 import org.fcitx.fcitx5.android.ui.main.settings.search.SettingsSearchEntry
 import org.fcitx.fcitx5.android.ui.main.settings.search.SettingsSearchIndex
 import org.fcitx.fcitx5.android.ui.main.settings.search.SettingsSearchPreference
-import org.fcitx.fcitx5.android.ui.main.update.UpdateCheckActivity
-import org.fcitx.fcitx5.android.utils.Const
 import org.fcitx.fcitx5.android.utils.addCategory
 import org.fcitx.fcitx5.android.utils.addPreference
 import org.fcitx.fcitx5.android.utils.navigateWithAnim
@@ -123,13 +120,6 @@ class MainFragment : PaddingPreferenceFragment() {
         @DrawableRes icon: Int,
         route: SettingsRoute,
         @StringRes summary: Int? = null
-    ) = addEntryPreference(title, icon, summary) { navigateWithAnim(route) }
-
-    private fun PreferenceCategory.addEntryPreference(
-        @StringRes title: Int,
-        @DrawableRes icon: Int,
-        @StringRes summary: Int? = null,
-        onClick: () -> Unit
     ) {
         addPreference(object : Preference(requireContext()) {
             override fun onBindViewHolder(holder: PreferenceViewHolder) {
@@ -140,7 +130,9 @@ class MainFragment : PaddingPreferenceFragment() {
                 }
             }
         }.apply {
-            setup(getString(title), summary?.let { getString(it) }, icon) { onClick() }
+            setup(getString(title), summary?.let { getString(it) }, icon) {
+                navigateWithAnim(route)
+            }
             widgetLayoutResource = R.layout.preference_settings_navigation
         })
     }
@@ -200,23 +192,12 @@ class MainFragment : PaddingPreferenceFragment() {
                     SettingsRoute.Advanced,
                     R.string.settings_group_advanced_summary
                 )
-                // 原右上角菜单的几项改为常规入口，更新检查常用，直接放出来
-                addEntryPreference(
-                    R.string.direct_rime_about_builds,
-                    R.drawable.ic_baseline_sync_24
-                ) { startActivity(Intent(requireContext(), UpdateCheckActivity::class.java)) }
-                addEntryPreference(R.string.faq, R.drawable.ic_baseline_help_outline_24) {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Const.faqUrl)))
-                }
+                // 原右上角菜单（常见问题 / 开发者 / 关于）收进这里，并放出版本与更新
                 addDestinationPreference(
-                    R.string.developer,
-                    R.drawable.ic_baseline_developer_mode_24,
-                    SettingsRoute.Developer
-                )
-                addDestinationPreference(
-                    R.string.about,
+                    R.string.settings_group_about,
                     R.drawable.ic_baseline_info_24,
-                    SettingsRoute.About
+                    SettingsRoute.SettingsGroup(SettingsGroupSpecs.ID_ABOUT),
+                    R.string.settings_group_about_summary
                 )
             }
 
