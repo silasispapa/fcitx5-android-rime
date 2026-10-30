@@ -190,6 +190,7 @@ abstract class BaseKeyboard(
     private val swipeSymbolDirection by prefs.keyboard.swipeSymbolDirection
 
     private val spaceSwipeMoveCursor = prefs.keyboard.spaceSwipeMoveCursor
+    private val spaceSwipeVerticalCursor = prefs.keyboard.spaceSwipeVerticalCursor
 
     /**
      * 空格键（[SpaceKey]/[MiniSpaceKey]）注册表：视图 + 它在布局里配置的划动动作。
@@ -1718,7 +1719,10 @@ abstract class BaseKeyboard(
                                         }
                                     }
                                     SwipeAxis.Y -> {
-                                        if (countY != 0) {
+                                        // 关闭上下移光标时仍消费纵向划动，不移光标也不打出空格
+                                        if (countY != 0 && !spaceSwipeVerticalCursor.getValue()) {
+                                            true
+                                        } else if (countY != 0) {
                                             val sym =
                                                 if (countY > 0) FcitxKeyMapping.FcitxKey_Down else FcitxKeyMapping.FcitxKey_Up
                                             val action = KeyAction.SymAction(KeySym(sym), KeyStates.Virtual)

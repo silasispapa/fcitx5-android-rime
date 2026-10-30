@@ -152,6 +152,7 @@ object SettingsSearchIndex {
         R.string.space_long_press_behavior to "space_long_press_behavior",
         R.string.space_key_label_mode to "space_key_label_mode",
         R.string.space_swipe_move_cursor to "space_swipe_move_cursor",
+        R.string.space_swipe_vertical_cursor to "space_swipe_vertical_cursor",
         R.string.show_lang_switch_key to "show_lang_switch_key",
 
         /* 键盘 · 按键反馈 */
@@ -613,6 +614,11 @@ object SettingsSearchIndex {
         SettingsSearchEntry(
             R.string.space_swipe_move_cursor, P_KEYBOARD,
             listOf("cursor", "光标", "guangbiao", "划动空格"),
+            route = keyboard(BEHAVIOR)
+        ),
+        SettingsSearchEntry(
+            R.string.space_swipe_vertical_cursor, P_KEYBOARD,
+            listOf("vertical cursor", "上下", "纵向", "上下移动光标", "shangxia"),
             route = keyboard(BEHAVIOR)
         ),
         SettingsSearchEntry(

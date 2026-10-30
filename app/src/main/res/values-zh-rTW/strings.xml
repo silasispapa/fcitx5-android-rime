@@ -438,6 +438,7 @@
     <string name="open_rime_user_data_dir">即將開啟應用資料目錄。RIME 使用者資料目錄位於「data」下，並取決於目前目錄設定。</string>
     <string name="generic_multiselect_min">至少需要選擇 %1$d 項。</string>
     <string name="space_swipe_move_cursor">划動空格以移動游標</string>
+    <string name="space_swipe_vertical_cursor">上下划動空格將游標移到上/下一行</string>
     <string name="please_wait">請稍候……</string>
     <string name="rotate">旋轉</string>
     <string name="flip">翻轉</string>
