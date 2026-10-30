@@ -14,6 +14,7 @@ import android.graphics.drawable.DrawableWrapper
 import android.graphics.drawable.StateListDrawable
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -46,6 +47,7 @@ import org.fcitx.fcitx5.android.utils.alpha
 import org.fcitx.fcitx5.android.utils.rippleDrawable
 import splitties.dimensions.dp
 import splitties.views.dsl.core.Ui
+import kotlin.math.abs
 
 /**
  * 符号 / 表情 / 颜文字面板，**面板独占整个键盘区域**：
@@ -122,6 +124,9 @@ class SymbolPanelUi(
 
         const val GRID_ITEM_HEIGHT_DP = 40
 
+        /** 网格左右滑动切换分组的最小横向位移。 */
+        const val SWIPE_THRESHOLD_DP = 32
+
         /** 每个面板保留最近十行记录，颜文字面板也按单列计算。 */
         const val RECENT_ROWS = 10
 
@@ -140,6 +145,7 @@ class SymbolPanelUi(
     }
 
     private val stylePref = AppPrefs.getInstance().symbols.symbolPanelStyle
+    private val longPressDelay = AppPrefs.getInstance().keyboard.longPressDelay
 
     /** 当前已生效的风格；[applyStyle] 里从偏好重读。 */
     private var style: SymbolPanelStyle = stylePref.getValue()
@@ -391,6 +397,54 @@ class SymbolPanelUi(
         adapter = gridAdapter
         itemAnimator = null
         overScrollMode = View.OVER_SCROLL_NEVER
+        addOnItemTouchListener(GroupSwipeListener())
+    }
+
+    /**
+     * 网格上左右滑动切换分组：左滑下一组，右滑上一组，两端不循环。
+     *
+     * 横向位移明显大于纵向时才拦截，拦截后格子收到 CANCEL，不会误上屏；
+     * 纵向滚动已开始或长按已触发（如肤色弹窗）时本次触摸不再参与。
+     */
+    private inner class GroupSwipeListener : RecyclerView.SimpleOnItemTouchListener() {
+        private val threshold = ctx.dp(SWIPE_THRESHOLD_DP)
+        private var downX = 0f
+        private var downY = 0f
+        private var downTime = 0L
+        private var tracking = false
+
+        override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.x
+                    downY = e.y
+                    downTime = e.eventTime
+                    tracking = true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!tracking) return false
+                    if (rv.scrollState != RecyclerView.SCROLL_STATE_IDLE ||
+                        e.eventTime - downTime >= longPressDelay.getValue()
+                    ) {
+                        tracking = false
+                        return false
+                    }
+                    val dx = abs(e.x - downX)
+                    return dx >= threshold && dx > 2 * abs(e.y - downY)
+                }
+                else -> tracking = false
+            }
+            return false
+        }
+
+        override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+            if (e.actionMasked != MotionEvent.ACTION_UP) return
+            tracking = false
+            val dx = e.x - downX
+            if (abs(dx) < threshold) return
+            val target = selectedIndex + if (dx < 0) 1 else -1
+            if (target in groups.indices) selectGroup(target)
+        }
     }
 
     /**
