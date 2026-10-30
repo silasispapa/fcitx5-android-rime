@@ -1719,7 +1719,7 @@ abstract class BaseKeyboard(
                                         }
                                     }
                                     SwipeAxis.Y -> {
-                                        // 关闭上下移光标时仍消费纵向划动，不移光标也不打出空格
+                                        // 关闭上下移光标时只吞掉纵向划动，抬手时按一次点击处理
                                         if (countY != 0 && !spaceSwipeVerticalCursor.getValue()) {
                                             true
                                         } else if (countY != 0) {
@@ -1741,9 +1741,18 @@ abstract class BaseKeyboard(
                             }
                         }
                         GestureType.Up -> {
+                            val lockedAxis = swipeDirectionLocked
                             // Reset direction lock on finger up
                             swipeDirectionLocked = null
                             onAction(KeyAction.VoiceInputHoldEnd)
+                            // 快打时手指离键常带出一点上下拖动：不移光标时当作点按空格，
+                            // 返回 true 让本次不再重复触发点击
+                            if (cursorMode && lockedAxis == SwipeAxis.Y &&
+                                !spaceSwipeVerticalCursor.getValue()
+                            ) {
+                                view.performClick()
+                                return@OnGestureListener true
+                            }
                             // 划动模式：抬手时按总位移方向触发用户配置的动作，语义与其它
                             // 键的 Behavior.Swipe 一致（一次划动只触发一次）。光标模式不触发。
                             if (
