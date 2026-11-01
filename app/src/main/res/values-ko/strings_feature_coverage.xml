@@ -471,4 +471,7 @@
     <string name="settings_ui_follow_keyboard_unavailable">Android 11 이상이 필요합니다</string>
     <string name="settings_ui_interaction">상호작용</string>
     <string name="setup_step_counter">%2$d단계 중 %1$d단계</string>
+    <string name="space_swipe_vertical_cursor">스페이스 키를 위/아래로 스와이프하여 줄 사이로 커서 이동</string>
+    <string name="settings_group_about">정보 및 업데이트</string>
+    <string name="settings_group_about_summary">버전 및 업데이트, 자주 묻는 질문, 개발자 및 정보</string>
 </resources>
