@@ -73,7 +73,7 @@
             android:name=".ui.main.settings.behavior.UserDataRestoreActivity"
             android:exported="false"
             android:process=":restore"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:theme="@style/Theme.FcitxSettings.System" />
         <activity
             android:name=".ui.setup.SetupActivity"
             android:exported="false"
@@ -83,6 +83,22 @@
             android:name=".ui.main.settings.im.RimeImportActivity"
             android:exported="false"
             android:label="@string/direct_rime_import" />
+        <activity
+            android:name=".ui.main.stats.InputStatsActivity"
+            android:exported="false"
+            android:label="@string/stats_title" />
+        <activity
+            android:name=".ui.main.wanxiang.WanxiangUpdateActivity"
+            android:exported="false"
+            android:label="@string/wanxiang_update" />
+        <activity
+            android:name=".ui.main.rimeupdate.RimeSchemeUpdateActivity"
+            android:exported="false"
+            android:label="@string/scheme_update_title" />
+        <activity
+            android:name=".ui.main.wanxiang.WanxiangAdvancedActivity"
+            android:exported="false"
+            android:label="@string/wanxiang_advanced" />
         <activity
             android:name=".ui.main.LogActivity"
             android:directBootAware="true"
@@ -144,11 +160,6 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:exported="false"
             android:label="@string/edit_text_keyboard_layout" />
-        <activity
-            android:name=".ui.main.settings.behavior.dialog.MacroEditorActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
-            android:exported="false"
-            android:label="编辑 Macro" />
         <activity
             android:name=".ui.main.settings.behavior.dialog.LayoutFileProfileInputActivity"
             android:exported="false"

@@ -221,6 +221,26 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
     }
 
     /**
+     * Preview-only composition state. This does not change the edited layout data or the live IME.
+     */
+    private var previewComposing: Boolean = false
+
+    private val composingPreviewCheckBox by lazy {
+        com.google.android.material.checkbox.MaterialCheckBox(this).apply {
+            text = getString(R.string.text_keyboard_layout_composing_preview)
+            isChecked = previewComposing
+            minHeight = dp(48)
+            textSize = 12f
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+            setOnCheckedChangeListener { _, isChecked -> onComposingPreviewToggled(isChecked) }
+            setOnLongClickListener {
+                showToast(getString(R.string.text_keyboard_layout_composing_preview_helper))
+                true
+            }
+        }
+    }
+
+    /**
      * 「分体键盘布局」勾选框，紧跟在子布局下拉框下面。
      *
      * 勾上就进入**当前子布局**的分体布局编辑；该子布局还没有分体布局时，先弹一个
@@ -240,8 +260,8 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
             setOnCheckedChangeListener { _, isChecked ->
                 onSplitCheckBoxToggled(isChecked)
             }
-            // 长按给一次完整解释：这一行只有"勾选框 + 一句状态"，而它管的是"哪个子布局的
-            // 分体布局"，光靠标签看不出来。用长按而不是常驻一行说明，是为了不把工具栏撑高。
+            // 长按给一次完整解释：分体选项管的是"哪个子布局的分体布局"，光靠标签看不出来。
+            // 用长按而不是常驻一行说明，是为了不把工具栏撑高。
             setOnLongClickListener {
                 showToast(getString(R.string.text_keyboard_layout_split_layout_helper))
                 true
@@ -249,12 +269,16 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
         }
     }
 
-    /** 子布局下拉框 + 「分体键盘布局」勾选框那一列（画在 spinnerContainer 下面）。 */
+    /** 子布局下拉框下面的合成态预览与分体布局选项。 */
     private val subModeOptionsColumn by lazy {
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(2))
+            addView(
+                composingPreviewCheckBox,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            )
             addView(
                 splitLayoutCheckBox,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT).apply { weight = 1f }
@@ -330,7 +354,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
                 if (position != null && rows != null && position.row in rows.indices && position.key in rows[position.row].indices) {
                     deleteSnackbar?.dismiss()
                     inlineTransactionActive = true
-                    rows[position.row][position.key] = draft
+                    LayoutKeyOperations.replaceKey(rows[position.row], position.key, draft)
                     currentLayout?.let { previewManager.updatePreview(it, resolvePreviewLabel(), fcitxConnection) }
                     canvasOverlay.refresh()
                     updateSaveButtonState()
@@ -493,9 +517,26 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
         // Selection must never remove the controls used to switch layout/schema/variant.
         spinnerContainer.visibility = View.VISIBLE
         subModeOptionsColumn.visibility = View.VISIBLE
+        val supportsCompositionPreview = currentLayout != TEXT_EDITOR_LAYOUT_NAME
+        if (!supportsCompositionPreview && previewComposing) {
+            previewComposing = false
+            composingPreviewCheckBox.setOnCheckedChangeListener(null)
+            composingPreviewCheckBox.isChecked = false
+            composingPreviewCheckBox.setOnCheckedChangeListener { _, isChecked ->
+                onComposingPreviewToggled(isChecked)
+            }
+        }
+        composingPreviewCheckBox.visibility = if (supportsCompositionPreview) View.VISIBLE else View.GONE
         createDedicatedButton.visibility = if (previewSubModeLabel != null && currentLayout?.let { resolveExistingSubModeKey(it) == null } == true && !editingSplit) View.VISIBLE else View.GONE
         actionStrip.visibility = if (imeVisible) View.GONE else View.VISIBLE
         exitBackCallback?.isEnabled = !stateLoaded || selectedKey != null || hasChanges()
+    }
+
+    private fun onComposingPreviewToggled(isChecked: Boolean) {
+        if (previewComposing == isChecked) return
+        previewComposing = isChecked
+        currentLayout?.let { previewManager.updatePreview(it, resolvePreviewLabel(), fcitxConnection) }
+        canvasOverlay.refresh()
     }
 
     private fun moveCanvasKey(source: EditorKeyPosition, target: EditorKeyPosition) {
@@ -513,7 +554,10 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
         if (!finishInlineEdit()) return
         val row = currentRowsRef.getOrNull(position.row) ?: return
         val key = row.getOrNull(position.key) ?: return
-        val copy = copyKeyData(key).apply { remove("splitAfter") }
+        val copy = copyKeyData(key).apply {
+            remove("splitAfter")
+            remove("splitRowDisabled")
+        }
         row.add(position.key + 1, copy)
         clearKeySelection()
         rowsAdapter?.notifyRowChanged(position.row)
@@ -528,7 +572,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
         inlineTransactionActive = false
         val row = currentRowsRef.getOrNull(position.row) ?: return
         if (position.key !in row.indices) return
-        row.removeAt(position.key)
+        LayoutKeyOperations.removeKey(row, position.key)
         clearKeySelection()
         rowsAdapter?.notifyRowChanged(position.row)
         currentLayout?.let { previewManager.updatePreview(it, resolvePreviewLabel(), fcitxConnection) }
@@ -660,7 +704,8 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
             // 却是普通排列的渲染——"改了没生效"的经典误判。
             forcedVariantProvider = {
                 if (editingSplit) LayoutVariant.Split else LayoutVariant.Docked
-            }
+            },
+            composingPreviewProvider = { previewComposing }
 
         )
     }
@@ -719,13 +764,14 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
                 val key = data.serializable<HashMap<String, Any?>>(KeyEditorActivity.EXTRA_RESULT_KEY_DATA)
                     ?.toMutableMap() ?: return
                 if (visible) clearKeySelection()
-                if (keyIndex == null) rows[rowIndex].add(key) else rows[rowIndex][keyIndex] = key
+                if (keyIndex == null) rows[rowIndex].add(key)
+                else LayoutKeyOperations.replaceKey(rows[rowIndex], keyIndex, key)
                 normalizeRowHeightPercent(rows[rowIndex])
             }
             KeyEditorActivity.RESULT_ACTION_DELETE -> {
                 if (keyIndex == null) return
                 if (visible) clearKeySelection()
-                rows[rowIndex].removeAt(keyIndex)
+                LayoutKeyOperations.removeKey(rows[rowIndex], keyIndex)
             }
             else -> return
         }
@@ -879,6 +925,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        previewComposing = savedInstanceState?.getBoolean(STATE_PREVIEW_COMPOSING, false) ?: false
         inlineKeyResults.restoreState(savedInstanceState)
         pendingEditorSelection = savedInstanceState?.let { state -> Bundle().apply {
             putString(STATE_CURRENT_LAYOUT, state.getString(STATE_CURRENT_LAYOUT))
@@ -886,6 +933,8 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
             putBoolean(STATE_PREVIEW_SUBMODE_IS_DEFAULT_ITEM,
                 state.getBoolean(STATE_PREVIEW_SUBMODE_IS_DEFAULT_ITEM, false))
             putBoolean(STATE_EDITING_SPLIT, state.getBoolean(STATE_EDITING_SPLIT, false))
+            putBoolean(STATE_PREVIEW_COMPOSING,
+                state.getBoolean(STATE_PREVIEW_COMPOSING, false))
         } }
         pendingInlineKeyState = savedInstanceState?.takeIf { it.containsKey("inline_key_row") }?.let { state ->
             Bundle().apply {
@@ -947,6 +996,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
             buildSubModeSpinner()
             normalizeEditingSplit()
             buildRows()
+            updateEditingChrome()
             pendingInlineKeyState?.let { state ->
                 if (state.getString("inline_key_layout") == currentEditingLayoutKey()) {
                     selectKey(EditorKeyPosition(state.getInt("inline_key_row"), state.getInt("inline_key_index")),
@@ -1031,6 +1081,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
         // 分体勾选框同样要跨重建保留。勾选状态映射到具体的条目，重建后由
         // normalizeEditingSplit() 校验它是否仍然存在。
         outState.putBoolean(STATE_EDITING_SPLIT, editingSplit)
+        outState.putBoolean(STATE_PREVIEW_COMPOSING, previewComposing)
         outState.putString(STATE_LAYOUT_PROFILE, currentLayoutProfile)
         pendingEditorResults.save(outState)
         if (!stateLoaded) {
@@ -1479,6 +1530,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
                 }
 
                 buildRows()
+                updateEditingChrome()
                 run { val layoutName = currentLayout ?: return@run; previewManager.updatePreview(layoutName, resolvePreviewLabel(), fcitxConnection) }
 
                 updateSaveButtonState()
@@ -2169,8 +2221,14 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
                     // so rejecting it here left views and data disagreeing until the next bind
                     // silently reverted the drag. `to == size` is legitimate — it means "move to
                     // the end" — and only becomes valid after the element is removed.
-                    val item = currentRow.removeAt(from)
-                    currentRow.add(to.coerceIn(0, currentRow.size), item)
+                    LayoutKeyOperations.move(
+                        currentRowsRef,
+                        EditorKeyPosition(rowIndex, from),
+                        EditorKeyPosition(
+                            rowIndex,
+                            (to + (if (from < to) 1 else 0)).coerceIn(0, currentRow.size)
+                        )
+                    )
                 }
 
                 override fun onKeyDragEnded(rowIndex: Int) {
@@ -2434,10 +2492,26 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
             textSize = 13f
             setTextColor(settingsColor(android.R.attr.textColorSecondary))
         })
-        form.addView(TextView(this).apply {
+        val keepSplitRowTogether = com.google.android.material.checkbox.MaterialCheckBox(this).apply {
+            text = getString(R.string.layout_editor_split_row_keep_together)
+            isChecked = LayoutKeyOperations.isSplitRowDisabled(row)
+            isEnabled = row.isNotEmpty()
+            visibility = if (editingSplit) View.VISIBLE else View.GONE
+            setPadding(0, dp(8), 0, 0)
+        }
+        form.addView(keepSplitRowTogether)
+        val splitRowHint = TextView(this).apply {
+            setText(R.string.layout_editor_split_row_keep_together_hint)
+            textSize = 13f
+            setTextColor(settingsColor(android.R.attr.textColorSecondary))
+            visibility = if (editingSplit) View.VISIBLE else View.GONE
+        }
+        form.addView(splitRowHint)
+        val splitBoundaryTitle = TextView(this).apply {
             setText(R.string.layout_editor_split_boundary)
             setPadding(0, dp(16), 0, 0)
-        })
+        }
+        form.addView(splitBoundaryTitle)
         val boundaries = listOf(getString(R.string.layout_editor_split_auto)) + row.dropLast(1).mapIndexed { index, key ->
             getString(R.string.layout_editor_split_after, index + 1, rowsAdapter?.buildKeyLabel(key).orEmpty())
         }
@@ -2447,6 +2521,15 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
             setSelection((row.indexOfLast { it["splitAfter"] == true } + 1).coerceIn(0, boundaries.lastIndex))
         }
         form.addView(boundary)
+        if (editingSplit) {
+            fun syncBoundaryEnabled() {
+                val enabled = !keepSplitRowTogether.isChecked
+                splitBoundaryTitle.isEnabled = enabled
+                boundary.isEnabled = enabled
+            }
+            keepSplitRowTogether.setOnCheckedChangeListener { _, _ -> syncBoundaryEnabled() }
+            syncBoundaryEnabled()
+        }
         // Row operations are explicit, separate from key properties.
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.layout_editor_row_settings) + " · " + (rowIndex + 1))
@@ -2470,6 +2553,9 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
                 row.forEach { key ->
                     key.remove("rowHeightPercent")
                     if (value != null) key["rowHeightPercent"] = value
+                }
+                if (editingSplit) {
+                    LayoutKeyOperations.setSplitRowDisabled(row, keepSplitRowTogether.isChecked)
                 }
                 LayoutKeyOperations.setSplitBoundary(row, (boundary.selectedItemPosition - 1).takeIf { it >= 0 })
                 clearKeySelection()
@@ -4267,6 +4353,7 @@ class TextKeyboardLayoutEditorActivity : SettingsUiActivity() {
         private const val STATE_PREVIEW_SUBMODE = "preview_submode"
         private const val STATE_PREVIEW_SUBMODE_IS_DEFAULT_ITEM = "preview_submode_is_default_item"
         private const val STATE_EDITING_SPLIT = "editing_split"
+        private const val STATE_PREVIEW_COMPOSING = "preview_composing"
         private const val STATE_LAYOUT_PROFILE = "layout_profile"
 
         /** Draft snapshots live here, under noBackupFilesDir: transient, never worth backing up. */

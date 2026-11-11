@@ -43,11 +43,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Fetch upstream tags
-        run: |
-          git remote add upstream https://github.com/fcitx5-android/fcitx5-android.git || true
-          git fetch upstream --tags
-
       - name: Remove non-semver local tags to avoid confusion
         shell: bash
         run: |
@@ -74,12 +69,15 @@ jobs:
         with:
           packages: 'platform-tools'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Prepare pinned NDK before configuring the app
+        run: python3 tools/prepare-ci-ndk.py
+
       - name: Prepare personal build sources
         run: |
           ./prepare_personal_build.sh
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
 
       - name: Build signed ARM64 Release and verify native dependencies and ART profile
         env:
@@ -134,10 +132,23 @@ jobs:
       - name: Check bundled clipboard rules and license packaging guards
         run: python3 -m unittest discover -s tools -p test_verify_clearurls_assets.py -v
 
+      - name: Test SDK integrity, offline cache and incremental recovery
+        run: >-
+          ./gradlew --no-daemon -p build-logic
+          '-Dorg.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8'
+          -Pkotlin.compiler.execution.strategy=in-process --max-workers=2
+          :convention:test --tests RimeSdkArchiveTest
+
+      - name: Prepare pinned NDK before configuring the app
+        run: |
+          python3 -m unittest discover -s tools -p test_prepare_ci_ndk.py -v
+          python3 tools/prepare-ci-ndk.py
+
       - name: Run JVM unit tests
         run: |
           set -o pipefail
           ./gradlew :app:testFxDebugUnitTest 2>&1 | tee unit-test-output.log
+          python3 tools/check-junit-results.py
 
       - name: Emit test failures as annotations
         if: failure()
@@ -154,7 +165,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: unit-test-reports
-          path: app/build/reports/tests/testFxDebugUnitTest/
+          path: |
+            app/build/reports/tests/testFxDebugUnitTest/
+            app/build/test-results/testFxDebugUnitTest/
+            build-logic/convention/build/test-results/test/
 
   nightly_release:
     needs: [build_commit, unit_test]
@@ -167,11 +181,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: Fetch upstream tags
-        run: |
-          git remote add upstream https://github.com/fcitx5-android/fcitx5-android.git || true
-          git fetch upstream --tags
 
       - name: Save previous release tag
         id: prev_tag

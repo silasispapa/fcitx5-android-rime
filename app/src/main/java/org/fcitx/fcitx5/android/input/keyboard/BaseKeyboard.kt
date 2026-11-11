@@ -108,6 +108,9 @@ abstract class BaseKeyboard(
     private val auxBarKeysProvider: () -> List<KeyDef> = { emptyList() }
 ) : ConstraintLayout(context) {
     private val previewMacroInput = MacroInputController { Timber.w(it, "Macro key cleanup failed") }
+    private val statisticsKeys = WeakHashMap<KeyView, Unit>()
+    private var statisticsLayout: org.fcitx.fcitx5.android.data.stats.StatsLayout? = null
+    private var statisticsCapturePosted = false
 
     private data class MacroContext(
         val execution: MacroInputController.Execution,
@@ -117,7 +120,39 @@ abstract class BaseKeyboard(
 
     override fun onDetachedFromWindow() {
         previewMacroInput.cancelAll()
+        statisticsLayout = null
         super.onDetachedFromWindow()
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        captureStatisticsLayout()
+    }
+
+    private fun captureStatisticsLayout() {
+        val service = getService()
+        if (!isAttachedToWindow || service?.isStatisticsRecordingEnabled() != true) {
+            statisticsLayout = null
+            return
+        }
+        runCatching { KeyboardStatisticsLayout.capture(this, statisticsKeys.keys) }
+            .onSuccess { if (it != statisticsLayout) statisticsLayout = it }
+            .onFailure { Timber.w(it, "Unable to capture statistics keyboard geometry") }
+    }
+
+    private fun recordStatisticsPress(key: KeyView) {
+        val label = key.statisticsKeyLabel ?: return
+        val service = getService() ?: return
+        if (!service.isStatisticsRecordingEnabled()) return
+        // Recording may have been enabled since the last layout. Capture after this event;
+        // the first press still contributes a count without walking the view hierarchy.
+        if (statisticsLayout == null && !statisticsCapturePosted) {
+            statisticsCapturePosted = true
+            post { statisticsCapturePosted = false; captureStatisticsLayout() }
+        }
+        runCatching {
+            service.recordStatisticsHeat(label, statisticsLayout ?: org.fcitx.fcitx5.android.data.stats.StatsLayout())
+        }.onFailure { Timber.w(it, "Unable to record statistics key press") }
     }
 
     /**
@@ -655,7 +690,7 @@ abstract class BaseKeyboard(
                     // Batch apply fontset mappings for all key labels.
                     forEach(::applyConfiguredFonts)
                 }
-                if (splitLayout) {
+                if (splitLayout && SplitRowLayoutPolicy.shouldSplit(row)) {
                     buildSplitRow(row, keyViews, splitKeyAreaScale)
                 } else {
                     buildRegularRow(row, keyViews)
@@ -707,8 +742,8 @@ abstract class BaseKeyboard(
                 .eachCount()
                 .maxByOrNull { it.value }
                 ?.key ?: 16f
-            val scrollableAdapter = AuxBarAdapter(theme, vMargin, hMargin, auxBarConfig.position, keyTextSize) { id ->
-                keyActionListener?.onKeyAction(KeyAction.AuxBarTrigger(id), KeyActionListener.Source.Keyboard)
+            val scrollableAdapter = AuxBarAdapter(theme, vMargin, hMargin, auxBarConfig.position, keyTextSize) { action ->
+                keyActionListener?.onKeyAction(KeyAction.AuxBarTrigger(action.tabTarget), KeyActionListener.Source.Keyboard)
             }
             scrollableRv.adapter = scrollableAdapter
             val keyAdapter = AuxBarKeyAdapter(
@@ -726,8 +761,8 @@ abstract class BaseKeyboard(
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
             }
-            val pinnedAdapter = AuxBarAdapter(theme, vMargin, hMargin, auxBarConfig.position, keyTextSize) { id ->
-                keyActionListener?.onKeyAction(KeyAction.AuxBarTrigger(id), KeyActionListener.Source.Keyboard)
+            val pinnedAdapter = AuxBarAdapter(theme, vMargin, hMargin, auxBarConfig.position, keyTextSize) { action ->
+                keyActionListener?.onKeyAction(KeyAction.AuxBarTrigger(action.tabTarget), KeyActionListener.Source.Keyboard)
             }
             pinnedRv.adapter = pinnedAdapter
 
@@ -1214,6 +1249,7 @@ abstract class BaseKeyboard(
 
     /** 奇数字符行：在几何中间键之后再插入它自身一份，使左右两半对称。否则原样返回。 */
     private fun duplicateMiddleKeyForSplit(row: List<KeyDef>): List<KeyDef> {
+        if (!SplitRowLayoutPolicy.shouldSplit(row)) return row
         if (row.size < 3 || row.size % 2 == 0) return row
         if (row.any { it is SpaceKey || it is MiniSpaceKey }) return row
         // 手动分界是用户对这个行的明确布置（常见于"中间键只留一侧"），复制中间键会
@@ -1664,6 +1700,11 @@ abstract class BaseKeyboard(
             is KeyDef.Appearance.Text -> TextKeyView(context, theme, activeAppearance, horizontalGapScale)
             is KeyDef.Appearance.Image -> ImageKeyView(context, theme, activeAppearance, horizontalGapScale, def.iconSlot)
         }.apply {
+            statisticsKeyLabel = KeyboardStatisticsLayout.label(def)
+            if (statisticsKeyLabel != null) {
+                statisticsKeys[this] = Unit
+                onStatisticsPress = ::recordStatisticsPress
+            }
             setTextScale(currentTextScale)
             soundEffect = when (def) {
                 is SpaceKey -> InputFeedbacks.SoundEffect.SpaceBar
@@ -3652,10 +3693,6 @@ abstract class BaseKeyboard(
         // do nothing by default - override in subclasses that render return key icons
     }
 
-    open fun onPunctuationUpdate(mapping: Map<String, String>) {
-        // do nothing by default
-    }
-
     open fun onInputMethodUpdate(ime: InputMethodEntry) {
         // do nothing by default
     }
@@ -3675,7 +3712,7 @@ class AuxBarAdapter(
     private val hMargin: Int,
     private val position: AuxBarPosition,
     private val keyTextSize: Float,
-    private val onTrigger: (Int) -> Unit
+    private val onTrigger: (AuxBarAction) -> Unit
 ) : RecyclerView.Adapter<AuxBarAdapter.ViewHolder>() {
 
     private var actions = listOf<AuxBarAction>()
@@ -3781,7 +3818,7 @@ class AuxBarAdapter(
         val label = item.tag as? AutoScaleTextView ?: return
         label.text = action.text
         label.setFontTypeFace("key_main_font")
-        item.setOnClickListener { onTrigger(action.id) }
+        item.setOnClickListener { onTrigger(action) }
     }
 
     private fun applyThemeStyling(view: CustomGestureView) {
@@ -3845,10 +3882,10 @@ class AuxBarAdapter(
     class ViewHolder(val view: CustomGestureView) : RecyclerView.ViewHolder(view) {
         internal val label: AutoScaleTextView get() = view.tag as AutoScaleTextView
 
-        fun bind(action: AuxBarAction, onTrigger: (Int) -> Unit) {
+        fun bind(action: AuxBarAction, onTrigger: (AuxBarAction) -> Unit) {
             label.text = action.text
             label.setFontTypeFace("key_main_font")
-            view.setOnClickListener { onTrigger(action.id) }
+            view.setOnClickListener { onTrigger(action) }
         }
     }
 }

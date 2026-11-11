@@ -3,6 +3,7 @@
 
     <!-- Bridge legacy platform color lookups used by existing settings editors to Material 3 roles. -->
     <style name="Theme.FcitxSettings.Base" parent="Theme.Material3Expressive.DynamicColors.DayNight.NoActionBar">
+        <item name="textInputStyle">@style/Widget.FcitxSettings.TextField</item>
         <item name="preferenceTheme">@style/ThemeOverlay.FcitxSettings.Preferences</item>
         <item name="preferenceStyle">@style/Preference.FcitxSettings</item>
         <item name="preferenceScreenStyle">@style/Preference.FcitxSettings.Screen</item>
@@ -33,6 +34,7 @@
     </style>
 
     <style name="Theme.FcitxSettings.Base.Light" parent="Theme.Material3Expressive.Light.NoActionBar">
+        <item name="textInputStyle">@style/Widget.FcitxSettings.TextField</item>
         <item name="preferenceTheme">@style/ThemeOverlay.FcitxSettings.Preferences</item>
         <item name="preferenceStyle">@style/Preference.FcitxSettings</item>
         <item name="preferenceScreenStyle">@style/Preference.FcitxSettings.Screen</item>
@@ -63,6 +65,7 @@
     </style>
 
     <style name="Theme.FcitxSettings.Base.Dark" parent="Theme.Material3Expressive.Dark.NoActionBar">
+        <item name="textInputStyle">@style/Widget.FcitxSettings.TextField</item>
         <item name="preferenceTheme">@style/ThemeOverlay.FcitxSettings.Preferences</item>
         <item name="preferenceStyle">@style/Preference.FcitxSettings</item>
         <item name="preferenceScreenStyle">@style/Preference.FcitxSettings.Screen</item>
@@ -120,4 +123,14 @@
     </style>
 
     <style name="InputViewSnackbarTheme" parent="Theme.MaterialComponents.Light.NoActionBar" />
+
+    <!-- IME service inflaters create a platform Button, which cannot apply the Expressive
+         button's MaterialThemeOverlay dimension attributes. Preserve the panel's colors. -->
+    <style name="ThemeOverlay.FcitxSettings.Snackbar" parent="">
+        <item name="snackbarButtonStyle">@style/Widget.Material3.Button.TextButton.Snackbar</item>
+    </style>
+
+    <style name="ThemeOverlay.FcitxSettings.ClipboardMenu" parent="">
+        <item name="android:popupMenuStyle">@style/Widget.Material3.PopupMenu</item>
+    </style>
 </resources>

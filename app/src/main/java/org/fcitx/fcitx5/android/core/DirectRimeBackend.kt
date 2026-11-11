@@ -17,10 +17,15 @@ import org.fcitx.fcitx5.android.FcitxApplication
 import org.fcitx.fcitx5.android.BuildConfig
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.data.DataManager
+import org.fcitx.fcitx5.android.data.WanxiangPayload
+import org.fcitx.fcitx5.android.data.WanxiangUpdateTransaction
+import org.fcitx.fcitx5.android.data.WanxiangAdvancedFiles
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+
+private val EMPTY_CANDIDATE_ACTIONS = emptyArray<CandidateAction>()
 
 /** Original frontend contract implemented directly on librime's single owner thread. */
 class DirectRimeBackend(context: Context) : InputEngine {
@@ -83,8 +88,6 @@ class DirectRimeBackend(context: Context) : InputEngine {
     private var bindingKeys = 0
     private var bindingSelections = 0
     private var pagingMode = 1
-    private var preferredSchema = ""
-    private var preferredAscii: Boolean? = null
     private var schemas = emptyList<Pair<String, String>>()
     private var optionRows = emptyList<List<String>>()
     private var optionsRevision = Long.MIN_VALUE
@@ -92,12 +95,16 @@ class DirectRimeBackend(context: Context) : InputEngine {
     private var candidateEventCached: FcitxEvent<*>? = null
     @Volatile private var candidateVersion = 0L
     override val candidateActionContext get() = CandidateActionContext(inputSession, candidateVersion)
+    override val candidateTabActionContext get() = snapshot?.let {
+        CandidateTabActionContext(it.generation, it.tabsRevision)
+    } ?: CandidateTabActionContext(inputSession, 0)
     private val forwardedKeys = mutableSetOf<Pair<Int, Int>>()
     private var startupError = ""
     private var statusHint = ""
     private var statusHintJob: Job? = null
     private val statusHintLifetime = StatusHintLifetime()
     private var statusHintGeneration = 0L
+    private val inputMethodEntryCache = DirectRimeInputMethodEntryCache()
     @Volatile private var maintenance = false
     override val acceptsInput get() = keyGate.canProcess()
     @Volatile override var inputMethodEntryCached = entry(null)
@@ -131,7 +138,8 @@ class DirectRimeBackend(context: Context) : InputEngine {
             try {
                 startupStage("assets") { DataManager.sync() }
                 startupStage("config") { config.load() }
-                startupStage("native") { Native.start(shared.absolutePath, config.user.absolutePath, BuildConfig.VERSION_NAME) }
+                startupStage("native") { Native.start(shared.absolutePath, config.user.absolutePath, BuildConfig.VERSION_NAME,
+                    fullCheck = WanxiangAdvancedFiles.needsDeploymentRepair(config.user)) }
                 started = true
                 startupError = ""
                 refreshSchemas()
@@ -204,23 +212,18 @@ class DirectRimeBackend(context: Context) : InputEngine {
         flags = target.flags
         val startedAt = SystemClock.elapsedRealtime()
         val noLearning = directBootMode || flags.flags and CapabilityFlag.PasswordOrSensitive.flag != 0UL
-        // Schema/option restoration and the first status read can also do synchronous I/O.
-        // Keep the whole binding at interactive priority; the guard restores it on failure too.
+        // Native binding restores Rime's schema/options and can do synchronous I/O.
+        // Keep it and the first status read at interactive priority, including failure paths.
         val details = interactivePriority.run {
             val before = Native.sessionStats()
             val beginAt = SystemClock.elapsedRealtimeNanos()
-            var result = Native.beginInput(generation, program, noLearning)
+            val result = Native.beginInput(generation, program, noLearning)
             val beginDone = SystemClock.elapsedRealtimeNanos()
             val beginTiming = if (BuildConfig.INPUT_DIAGNOSTICS) Native.operationTiming() else null
-            if (result.ready) {
-                appliedNoLearning = noLearning
-                if (preferredSchema.isNotEmpty() && result.schema != preferredSchema && schemas.any { it.first == preferredSchema })
-                    result = Native.action(generation, result.revision, 3, 0, preferredSchema)
-                preferredAscii?.let { ascii ->
-                    if (result.ascii != ascii) result = Native.action(generation, result.revision, 8, if (ascii) 1 else 0, "ascii_mode")
-                }
-            }
-            val restoreDone = SystemClock.elapsedRealtimeNanos()
+            // Rime already applies saved options, schema resets and its schema-selection
+            // policy. Replaying an earlier editor's snapshot would override that result.
+            if (result.ready) appliedNoLearning = noLearning
+            val publishAt = SystemClock.elapsedRealtimeNanos()
             publish(result)
             bindingKeys = 0
             bindingSelections = 0
@@ -232,8 +235,8 @@ class DirectRimeBackend(context: Context) : InputEngine {
             // CPU/fault/I/O instrumentation is still restricted to INPUT_DIAGNOSTICS builds.
             "ready=${result.ready} usable=$usable direct=${forwardsKeysDirectly()} no_learning=$noLearning" +
                 " created=${after[0] - before[0]} reused=${after[1] - before[1]}" +
-                " native_begin_us=${(beginDone - beginAt) / 1000} restore_us=${(restoreDone - beginDone) / 1000}" +
-                " publish_us=${(publishDone - restoreDone) / 1000}" +
+                " native_begin_us=${(beginDone - beginAt) / 1000}" +
+                " publish_us=${(publishDone - publishAt) / 1000}" +
                 if (beginTiming != null) " ${nativeTiming(beginTiming)}" else ""
         }
         android.util.Log.i("RimeLifecycle", "bind generation=$generation duration_ms=${SystemClock.elapsedRealtime() - startedAt} $details")
@@ -267,18 +270,40 @@ class DirectRimeBackend(context: Context) : InputEngine {
         ).onEach { it.inputSession = generation })
         android.util.Log.i("RimeLifecycle", "binding_inactive generation=$generation native_create=false")
     }
-    private fun act(action: Int, index: Int = 0, value: String = ""): Snapshot? {
+    private fun act(action: Int, index: Int = 0, value: String = "", forceCandidates: Boolean = false,
+                    statisticsSource: InputStatisticsSource? = null): Snapshot? {
         val previous = snapshot ?: return null
         if (!started || maintenance || previous.generation != inputSession) return null
+        val collectStatistics = shouldCollectStatistics(statisticsSource, previous)
+        val wallTime = if (collectStatistics) System.currentTimeMillis() else 0L
+        val monotonicTime = if (collectStatistics) SystemClock.elapsedRealtime() else 0L
         return interactivePriority.run {
-            Native.action(previous.generation, previous.revision, action, index, value).also { publish(it) }
+            Native.action(previous.generation, previous.revision, action, index, value, collectStatistics).also {
+                val statistics = if (collectStatistics) statisticsFromResult(statisticsSource!!, previous, it, wallTime, monotonicTime) else null
+                publish(it, forceCandidates = forceCandidates, statistics = statistics)
+            }
         }
+    }
+
+    private fun shouldCollectStatistics(source: InputStatisticsSource?, previous: Snapshot?): Boolean {
+        if (source == null || previous == null || !previous.ready || directBootMode || forwardsKeysDirectly() ||
+            source.generation != inputSession || previous.generation != inputSession ||
+            flags.flags and CapabilityFlag.PasswordOrSensitive.flag != 0UL) return false
+        return try { source.stillEnabled() } catch (_: Exception) { false }
+    }
+
+    private fun statisticsFromResult(source: InputStatisticsSource, previous: Snapshot, result: Snapshot,
+                                     wallTime: Long, monotonicTime: Long): InputOperationStatistics? {
+        if (result.rawInputLength < 0) return null
+        return InputOperationStatistics(source.epoch, previous.schema, previous.schemaName,
+            result.rawInputLength + 1, result.inputWasCommand, result.preedit.isNotEmpty(), wallTime, monotonicTime)
     }
     private fun formatted(text: String, cursor: Int = text.length, underline: Boolean = false) =
         if (text.isEmpty()) FormattedText.Empty else FormattedText(arrayOf(text),
             intArrayOf(if (underline) TextFormatFlag.Underline.flag else 0), cursor.coerceIn(0, text.length))
 
-    private fun publish(value: Snapshot, release: Boolean = false) {
+    private fun publish(value: Snapshot, release: Boolean = false, forceCandidates: Boolean = false,
+                        statistics: InputOperationStatistics? = null, statisticsKey: Int? = null) {
         if (value.generation != inputSession || value.gate == 3) return
         val previous = snapshot
         snapshot = value
@@ -297,8 +322,6 @@ class DirectRimeBackend(context: Context) : InputEngine {
         }
         val optionsChanged = value.ready && value.optionsRevision != optionsRevision
         if (value.ready) {
-            preferredSchema = value.schema
-            preferredAscii = value.ascii
             if (optionsChanged) {
                 optionRows = Native.options().toList().chunked(4)
                 optionsRevision = value.optionsRevision
@@ -309,7 +332,10 @@ class DirectRimeBackend(context: Context) : InputEngine {
             "CommitPreview" -> formatted(value.preview, underline = true)
             else -> FormattedText.Empty
         }
-        val tabs = value.tabs.mapIndexed { i, text -> CandidateAction(i, text, false, "", false, false) }.toTypedArray()
+        val tabContext = CandidateTabActionContext(value.generation, value.tabsRevision)
+        val tabs = if (value.tabs.isEmpty()) EMPTY_CANDIDATE_ACTIONS else Array(value.tabs.size) { i ->
+            CandidateAction(i, value.tabs[i], false, "", false, false, CandidateTabActionTarget(tabContext, i))
+        }
         val panel = FcitxEvent.InputPanelEvent.Data(
             if (config.preeditMode == "No") formatted(value.preedit, value.cursorUtf16) else FormattedText.Empty,
             if (directInput && bindingUsable(value)) FormattedText.Empty
@@ -327,27 +353,36 @@ class DirectRimeBackend(context: Context) : InputEngine {
         inputMethodEntryCached = ime
         statusAreaActionsCached = actions
         val batch = mutableListOf<FcitxEvent<*>>()
+        if (statistics != null && statisticsKey != null && value.ready)
+            batch += FcitxEvent.StatisticsKeyEvent(statistics, statisticsKey)
         if (value.commit.isNotEmpty()) batch += FcitxEvent.CommitStringEvent(FcitxEvent.CommitStringEvent.Data(value.commit, -1)).apply {
             commitProducedNanos = SystemClock.elapsedRealtimeNanos()
+            this.statistics = statistics
         }
         if (clientChanged) batch += FcitxEvent.ClientPreeditEvent(client)
         if (panelChanged) batch += FcitxEvent.InputPanelEvent(panel)
-        val candidates = value.candidates.mapIndexed { i, text ->
+        val candidates = Array(value.candidates.size) { i ->
             // Candidate codes are separate metadata, not a schema's visible comment.
             // Appending them would bypass Lua filters such as Wanxiang's comment switch.
-            CandidateWord(value.labels.getOrElse(i) { "${(i + 1) % 10} " }, text, value.comments.getOrElse(i) { "" })
-        }.toTypedArray()
+            CandidateWord(value.labels.getOrElse(i) { "${(i + 1) % 10} " }, value.candidates[i],
+                value.comments.getOrElse(i) { "" })
+        }
         val candidateEvent = if (pagingMode != 0) FcitxEvent.PagedCandidateEvent(FcitxEvent.PagedCandidateEvent.Data(
             candidates, value.highlighted, FcitxEvent.PagedCandidateEvent.LayoutHint.NotSet, value.page > 0, !value.lastPage))
         else FcitxEvent.CandidateListEvent(FcitxEvent.CandidateListEvent.Data(-1, candidates))
         // An unchanged first page can hide a changed tail of a lazy translation.
         // Keep handled keys/actions and composition changes invalidating expanded pages.
-        if (newSession || value.handled || optionsChanged || previous?.preedit != value.preedit ||
-            previous?.cursorBytes != value.cursorBytes || candidateEvent != candidateEventCached) {
-            candidateVersion++
-            candidateEvent.candidateActionContext = CandidateActionContext(value.generation, candidateVersion)
-            batch += candidateEvent
+        val invalidateCandidates = newSession || value.handled || optionsChanged || previous?.preedit != value.preedit ||
+            previous?.cursorBytes != value.cursorBytes || candidateEvent != candidateEventCached
+        if (invalidateCandidates) candidateVersion++
+        val candidateContext = CandidateActionContext(value.generation, candidateVersion)
+        candidates.forEachIndexed { index, candidate ->
+            // The native snapshot contains the current Rime page, even when a UI
+            // chooses a different presentation mode. Keep that source identity.
+            candidate.selectionTarget = CandidateSelectionTarget(candidateContext, index, global = false)
         }
+        candidateEvent.candidateActionContext = candidateContext
+        if (invalidateCandidates || forceCandidates) batch += candidateEvent
         candidateEventCached = candidateEvent
         if (imeChanged) batch += FcitxEvent.IMChangeEvent(ime)
         if (statusChanged) batch += FcitxEvent.StatusAreaEvent(FcitxEvent.StatusAreaEvent.Data(actions, ime))
@@ -400,16 +435,16 @@ class DirectRimeBackend(context: Context) : InputEngine {
     }
     private fun entry(value: Snapshot?): InputMethodEntry {
         val ascii = value?.ascii == true || forwardsKeysDirectly()
-        return InputMethodEntry("rime", context.getString(R.string.direct_rime_ime_name), "fcitx-rime", "中州韵", "㞢", "zh", "rime", true,
-            InputMethodSubMode(if (ascii) "Latin Mode" else value?.schemaName.orEmpty(),
-                if (ascii) "abc" else value?.schemaName.orEmpty(),
-                if (ascii) "fcitx_rime_latin" else "fcitx-rime:${value?.schema.orEmpty()}"))
+        return inputMethodEntryCache.get(ascii, value?.schema.orEmpty(), value?.schemaName.orEmpty(),
+            context.getString(R.string.direct_rime_ime_name))
     }
     private fun action(id: Int, name: String, text: String = name, checked: Boolean? = null,
                        menu: Array<Action>? = null, separator: Boolean = false) =
         Action(id, separator, checked != null, checked == true, name, "", text, text, menu)
     private fun buildActions(value: Snapshot): Array<Action> {
-        val menu = mutableListOf(action(10, "ascii_mode", "西文", value.ascii))
+        // The label describes the next mode; checked still reports Rime's current ASCII state.
+        val targetMode = context.getString(if (value.ascii) R.string.direct_rime_chinese_mode else R.string.direct_rime_ascii_mode)
+        val menu = mutableListOf(action(10, "ascii_mode", targetMode, value.ascii))
         schemas.forEachIndexed { i, (id, name) -> menu += action(100 + i, id, name, id == value.schema) }
         menu += action(9, "separator", separator = true)
         val options = buildList {
@@ -431,7 +466,7 @@ class DirectRimeBackend(context: Context) : InputEngine {
         }
         menu += action(11, "deploy", "重新部署")
         menu += action(12, "sync", "同步用户词典")
-        val label = if (value.ascii) "西文" else value.schemaName.ifEmpty { "Rime" }
+        val label = if (value.ascii) context.getString(R.string.direct_rime_ascii_mode) else value.schemaName.ifEmpty { "Rime" }
         return arrayOf(action(1, "rime", label, menu = menu.toTypedArray()), *options.toTypedArray())
     }
     private fun showUnavailable(message: String) {
@@ -441,6 +476,11 @@ class DirectRimeBackend(context: Context) : InputEngine {
 
     override suspend fun sendKey(sym: Int, states: UInt, code: Int, up: Boolean, timestamp: Int) {
         val expected = inputSession
+        // Rime can commit on a release too (for example a schema's release binding).
+        // Only DOWN produces a key counter, but either half may carry commit metadata.
+        val statisticsSource = currentCoroutineContext()[InputStatisticsSource]
+        val diagnosticTask = if (BuildConfig.INPUT_DIAGNOSTICS)
+            currentCoroutineContext()[InputDiagnostics.ServiceTask] else null
         if (maintenance) return
         val queuedAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
         events.awaitCapacity()
@@ -450,13 +490,20 @@ class DirectRimeBackend(context: Context) : InputEngine {
             val ownerAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
             val bypass = forwardsKeysDirectly()
             if (!up) clearStatusHint()
-            val result = if (bypass) null else interactivePriority.run { Native.key(expected, sym, states.toInt(), up) }
+            val previous = snapshot
+            val collectStatistics = !bypass && shouldCollectStatistics(statisticsSource, previous)
+            val wallTime = if (collectStatistics) System.currentTimeMillis() else 0L
+            val monotonicTime = if (collectStatistics) SystemClock.elapsedRealtime() else 0L
+            val result = if (bypass) null else interactivePriority.run { Native.key(expected, sym, states.toInt(), up, collectStatistics) }
             val nativeAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
-            if (result != null) publish(result, release = up)
+            if (result != null) {
+                val statistics = if (collectStatistics) statisticsFromResult(statisticsSource!!, previous!!, result, wallTime, monotonicTime) else null
+                publish(result, release = up, statistics = statistics, statisticsKey = if (up) null else sym)
+            }
             if (!up && result?.ready == true) {
                 bindingKeys++
                 if (BuildConfig.INPUT_DIAGNOSTICS && (bindingKeys <= 3 || nativeAt - queuedAt >= 100_000_000L))
-                    android.util.Log.i("RimeInputTiming", "key generation=$expected ordinal=$bindingKeys admission_wait_us=${(admittedAt - queuedAt) / 1000} owner_wait_us=${(ownerAt - admittedAt) / 1000} native_us=${(nativeAt - ownerAt) / 1000} publish_us=${(SystemClock.elapsedRealtimeNanos() - nativeAt) / 1000} ${nativeTiming()}")
+                    android.util.Log.i("RimeInputTiming", "key generation=$expected ordinal=$bindingKeys service_task=${diagnosticTask?.id ?: 0} service_category=${diagnosticTask?.category ?: "none"} admission_wait_us=${(admittedAt - queuedAt) / 1000} owner_wait_us=${(ownerAt - admittedAt) / 1000} native_us=${(nativeAt - ownerAt) / 1000} publish_us=${(SystemClock.elapsedRealtimeNanos() - nativeAt) / 1000} ${nativeTiming()}")
             }
             val keyId = sym to code
             val forward = if (up) forwardedKeys.remove(keyId) else
@@ -470,32 +517,43 @@ class DirectRimeBackend(context: Context) : InputEngine {
             }
         }
     }
-    override suspend fun sendKey(c: Char, states: UInt, code: Int, up: Boolean, timestamp: Int) = sendKey(c.code, states, code, up, timestamp)
+    override suspend fun sendKey(c: Char, states: UInt, code: Int, up: Boolean, timestamp: Int) =
+        sendKey(KeyCodec.fromUnicode(c.code), states, code, up, timestamp)
     override suspend fun sendKey(key: String, states: UInt, code: Int, up: Boolean, timestamp: Int) {
         val parsed = Key.parse(key)
         sendKey(parsed.sym, states or parsed.states.toUInt(), code, up, timestamp)
     }
     override suspend fun sendKey(sym: KeySym, states: KeyStates, code: Int, up: Boolean, timestamp: Int) = sendKey(sym.sym, states.states, code, up, timestamp)
-    private suspend fun performAction(action: Int, index: Int, candidateContext: CandidateActionContext? = null): Snapshot? {
+    private suspend fun performAction(
+        action: Int,
+        index: Int,
+        candidateContext: CandidateActionContext? = null,
+        tabContext: CandidateTabActionContext? = null
+    ): Snapshot? {
         val expected = snapshot ?: return null
+        val statisticsSource = if (action == 1 || action == 11) currentCoroutineContext()[InputStatisticsSource] else null
+        val diagnosticTask = if (BuildConfig.INPUT_DIAGNOSTICS)
+            currentCoroutineContext()[InputDiagnostics.ServiceTask] else null
         if (!acceptsInput || expected.generation != inputSession ||
-            (candidateContext != null && candidateContext != candidateActionContext)) return null
+            (candidateContext != null && candidateContext != candidateActionContext) ||
+            (tabContext != null && tabContext != candidateTabActionContext)) return null
         val queuedAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
         events.awaitCapacity()
         val admittedAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
         return onOwner {
             if (expected.generation != inputSession || snapshot?.revision != expected.revision ||
-                (candidateContext != null && candidateContext != candidateActionContext)) {
+                (candidateContext != null && candidateContext != candidateActionContext) ||
+                (tabContext != null && tabContext != candidateTabActionContext)) {
                 if (action == 1 || action == 11)
-                    android.util.Log.i("RimeInputTiming", "select_rejected generation=${expected.generation} reason=stale_snapshot")
+                    android.util.Log.i("RimeInputTiming", "select_rejected generation=${expected.generation} service_task=${diagnosticTask?.id ?: 0} reason=stale_snapshot")
                 null
             } else {
                 val ownerAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
-                val result = act(action, index)
+                val result = act(action, index, statisticsSource = statisticsSource)
                 if (action == 1 || action == 11) {
                     bindingSelections++
                     if (BuildConfig.INPUT_DIAGNOSTICS && (bindingSelections <= 2 || SystemClock.elapsedRealtimeNanos() - ownerAt >= 100_000_000L))
-                        android.util.Log.i("RimeInputTiming", "select generation=${expected.generation} ordinal=$bindingSelections admission_wait_us=${(admittedAt - queuedAt) / 1000} owner_wait_us=${(ownerAt - admittedAt) / 1000} native_publish_us=${(SystemClock.elapsedRealtimeNanos() - ownerAt) / 1000} ${nativeTiming()}")
+                        android.util.Log.i("RimeInputTiming", "select generation=${expected.generation} ordinal=$bindingSelections service_task=${diagnosticTask?.id ?: 0} service_category=${diagnosticTask?.category ?: "none"} admission_wait_us=${(admittedAt - queuedAt) / 1000} owner_wait_us=${(ownerAt - admittedAt) / 1000} native_publish_us=${(SystemClock.elapsedRealtimeNanos() - ownerAt) / 1000} ${nativeTiming()}")
                 }
                 result
             }
@@ -503,18 +561,46 @@ class DirectRimeBackend(context: Context) : InputEngine {
     }
     override suspend fun select(idx: Int) = idx >= 0 && performAction(if (pagingMode == 0) 11 else 1, idx)?.ready == true
     override suspend fun selectGlobal(idx: Int) = idx >= 0 && performAction(11, idx)?.ready == true
+    override suspend fun selectCandidateIfCurrent(idx: Int, global: Boolean, expected: CandidateActionContext) =
+        idx >= 0 && performAction(if (global) 11 else 1, idx, expected)?.ready == true
     override suspend fun isEmpty() = onOwner { snapshot?.preedit.isNullOrEmpty() }
     override suspend fun reset() { onOwner { act(0) } }
-    override suspend fun moveCursor(position: Int) { onOwner {
-        val text = snapshot?.preedit ?: return@onOwner
-        act(9, text.take(position.coerceIn(0, text.length)).toByteArray().size)
-    } }
+    override suspend fun moveCursor(position: Int) { onOwner { moveCursorOnOwner(position, inputSession, null) } }
+    override suspend fun moveCursorIfCurrent(position: Int, expectedSession: Long, expectedPreedit: String) =
+        onOwner { moveCursorOnOwner(position, expectedSession, expectedPreedit) }
+
+    private fun moveCursorOnOwner(position: Int, expectedSession: Long, expectedPreedit: String?): Boolean {
+        val value = snapshot ?: return false
+        if (!started || maintenance || !value.ready || value.generation != inputSession || expectedSession != inputSession)
+            return false
+        fun restoreClientCursor() {
+            events.offer(listOf(FcitxEvent.ClientPreeditEvent(clientPreeditCached).apply { inputSession = value.generation }))
+        }
+        // CommitPreview is a prediction, not an editable representation of raw input.
+        if (config.preeditMode != "ComposingText" ||
+            (expectedPreedit != null && expectedPreedit != clientPreeditCached.toString())) {
+            restoreClientCursor()
+            return false
+        }
+        val raw = Native.rawInput(value.generation, value.revision)
+        val target = raw?.let { preeditCursorToRawBytes(value.preedit, value.cursorUtf16, it.text, it.caretBytes, position) }
+        if (raw == null || target == null) {
+            restoreClientCursor()
+            return false
+        }
+        if (target == raw.caretBytes) {
+            restoreClientCursor()
+            return true
+        }
+        return act(9, target)?.ready == true
+    }
     override suspend fun getCandidates(offset: Int, limit: Int): Array<CandidateWord> {
         val expected = snapshot ?: return emptyArray()
         // Snapshot revisions also advance on unhandled key-up. Only cancel a
         // page when a candidate invalidation was actually published, otherwise
         // Paging would lose its load without receiving a replacement refresh.
         val expectedVersion = candidateVersion
+        val selectionContext = CandidateActionContext(expected.generation, expectedVersion)
         val count = limit.coerceIn(1, 256)
         if (offset < 0 || offset > Int.MAX_VALUE - count) return emptyArray()
         return readCandidatePage(offset, count) { start, size ->
@@ -523,7 +609,11 @@ class DirectRimeBackend(context: Context) : InputEngine {
                     candidateVersion != expectedVersion) return@onOwner null
                 trace("rime.direct.candidate_batch") {
                     Native.candidates(expected.generation, start, size).toList().chunked(2)
-                        .map { CandidateWord("", it[0], it[1]) }
+                        .mapIndexed { index, word ->
+                            CandidateWord("", word[0], word[1]).apply {
+                                selectionTarget = CandidateSelectionTarget(selectionContext, start + index, global = true)
+                            }
+                        }
                 }
             }
         }.toTypedArray()
@@ -542,13 +632,16 @@ class DirectRimeBackend(context: Context) : InputEngine {
             act(3, value = schemas[id - 100].first)?.ready == true
         }
     }
-    override suspend fun setCandidatePagingMode(mode: Int) { onOwner { pagingMode = mode; snapshot?.takeIf { it.generation == inputSession }?.let { publishWithoutCommit(it) } } }
-    private fun publishWithoutCommit(value: Snapshot) {
-        // Native action 9 refreshes without consuming a key; never republish a commit-bearing result.
-        act(9, value.cursorBytes)
+    override suspend fun setCandidatePagingMode(mode: Int) { onOwner { pagingMode = mode; refreshPresentation(forceCandidates = true) } }
+    private fun refreshPresentation(forceCandidates: Boolean = false) {
+        // Read fresh output; never move raw input or replay a commit-bearing cached snapshot.
+        act(13, forceCandidates = forceCandidates)
     }
     override suspend fun offsetCandidatePage(delta: Int) { onOwner { repeat(kotlin.math.abs(delta).coerceAtMost(100)) { act(2, delta) } } }
     override suspend fun triggerCandidateListTabAction(id: Int) { performAction(if (id == -1) 7 else 4, id) }
+    override suspend fun triggerCandidateListTabActionIfCurrent(target: CandidateTabActionTarget): Boolean =
+        target.id >= -1 &&
+            performAction(if (target.id == -1) 7 else 4, target.id, tabContext = target.context)?.ready == true
 
     override suspend fun availableIme() = arrayOf(inputMethodEntryCached)
     override suspend fun enabledIme() = availableIme()
@@ -613,10 +706,26 @@ class DirectRimeBackend(context: Context) : InputEngine {
         }
     }
 
+    private fun restoreMaintenanceBinding(token: Long, previous: Binding?) {
+        if (!started || token != inputSession || hasUsableBinding(token)) return
+        val current = synchronized(bindingLock) { binding?.takeIf { it.generation == token } }
+        if (current == null && previous != null) {
+            prepareInputSession(token, previous.program, previous.flags, previous.needsRime)
+        }
+        if (synchronized(bindingLock) { binding?.generation == token }) begin(token)
+        else clearBinding(token)
+    }
+
     private suspend fun maintain(operation: () -> Unit) = maintenanceMutex.withLock {
         maintenance = true
         keyGate.block()
-        val token = invalidateInputSession()
+        val (token, previousBinding) = synchronized(bindingLock) {
+            val previous = binding
+            val next = epoch.incrementAndGet()
+            binding = null
+            keyGate.invalidate(next)
+            next to previous
+        }
         try { onOwner {
             clearBinding(token)
             statusAreaActionsCached = emptyArray()
@@ -626,11 +735,24 @@ class DirectRimeBackend(context: Context) : InputEngine {
             showUnavailable("正在部署，请稍候…")
             operation()
             refreshSchemas()
-            if (token == inputSession) begin(token)
+            restoreMaintenanceBinding(token, previousBinding)
         } } catch (e: Exception) {
-            onOwner {
-                if (started && token == inputSession) begin(token)
-                showUnavailable(e.message ?: "操作失败，请检查方案文件")
+            try {
+                withContext(NonCancellable) {
+                    onOwner {
+                        if (token == inputSession) {
+                            try {
+                                restoreMaintenanceBinding(token, previousBinding)
+                            } finally {
+                                if (e !is CancellationException) {
+                                    showUnavailable(e.message ?: "操作失败，请检查方案文件")
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (recovery: Exception) {
+                if (recovery !== e) e.addSuppressed(recovery)
             }
             throw e
         } finally { maintenance = false; keyGate.running(started) }
@@ -645,12 +767,15 @@ class DirectRimeBackend(context: Context) : InputEngine {
         started = false
         Native.start(shared.absolutePath, config.user.absolutePath, BuildConfig.VERSION_NAME, fullCheck = true)
         started = true
-        preferredSchema = ""; preferredAscii = null
     }
     override fun setLogRule(verbose: Boolean) {}
     override fun translate(str: String, domain: String) = str
     override fun getAddonReverseDependencies(addon: String) = emptyList<Pair<String, FcitxAPI.AddonDep>>()
-    override suspend fun save() { onOwner { if (started) Native.sync() } }
+    override suspend fun save() {
+        // An unavailable engine must not prevent exporting existing user files.
+        // When running, sync destroys native sessions and needs the maintenance gate.
+        if (onOwner { started }) synchronize()
+    }
     override suspend fun saveNonRimeState() {}
     override suspend fun reloadConfig() = maintain { config.load(); restartNative() }
     override suspend fun getGlobalConfig() = getImConfig("rime")
@@ -658,16 +783,103 @@ class DirectRimeBackend(context: Context) : InputEngine {
     override suspend fun getAddonConfig(addon: String) = getImConfig(addon)
     override suspend fun setAddonConfig(addon: String, config: RawConfig) = setImConfig(addon, config)
     override suspend fun getImConfig(key: String) = onOwner { config.describe() }
-    override suspend fun setImConfig(key: String, config: RawConfig) { onOwner { this.config.setOptions(config); act(9, snapshot?.cursorBytes ?: 0) } }
+    override suspend fun setImConfig(key: String, config: RawConfig) { onOwner { this.config.setOptions(config); refreshPresentation() } }
     override suspend fun addons() = arrayOf(AddonInfo("rime", "Rime", "librime 直连引擎", AddonCategory.InputMethod, true, true, true, false))
     override suspend fun setAddonState(name: Array<String>, state: BooleanArray) { require(state.all { it }) { "Rime 引擎不可关闭" } }
-    override suspend fun getAddonSubConfig(addon: String, path: String) = onOwner { when(path) {
-        "profile-manager" -> config.directoryState()
-        "schema-selector" -> RawConfig(arrayOf(RawConfig("Items", if (started) Native.schemaSelection() else "")))
-        else -> RawConfig()
-    } }
+    override suspend fun getAddonSubConfig(addon: String, path: String): RawConfig {
+        if (path.startsWith("wanxiang-settings/")) {
+            val file = path.removePrefix("wanxiang-settings/")
+            return onOwner {
+                org.fcitx.fcitx5.android.daemon.FcitxDaemon.requireUserDataAvailable()
+                require(WanxiangAdvancedFiles.source(file))
+                config.requireUpdateTarget(config.current, config.user.canonicalPath)
+                val snapshot = kotlinx.serialization.json.Json.encodeToString(WanxiangAdvancedFiles.snapshot(config.user, file, shared))
+                RawConfig(arrayOf(RawConfig("Snapshot", snapshot)))
+            }
+        }
+        return onOwner { when(path) {
+            "profile-manager" -> config.directoryState()
+            "schema-selector" -> RawConfig(arrayOf(RawConfig("Items", if (started) Native.schemaSelection() else "")))
+            else -> RawConfig()
+        } }
+    }
     override suspend fun setAddonSubConfig(addon: String, path: String, config: RawConfig) {
         when(path) {
+            "wanxiang-settings-repair" -> withContext(NonCancellable) { maintain {
+                org.fcitx.fcitx5.android.daemon.FcitxDaemon.requireUserDataAvailable()
+                this@DirectRimeBackend.config.requireUpdateTarget(config.findByName("Profile")!!.value, config.findByName("Path")!!.value)
+                restartNative()
+            } }
+            "wanxiang-settings-save" -> withContext(NonCancellable) { maintain {
+                org.fcitx.fcitx5.android.daemon.FcitxDaemon.requireUserDataAvailable()
+                val id = java.util.UUID.fromString(config.findByName("RequestId")!!.value)
+                val job = WanxiangPayload.child(context.noBackupFilesDir.canonicalFile, "wanxiang-settings/$id")
+                val planFile = WanxiangPayload.child(job, "plan.json")
+                require(planFile.isFile && planFile.length() <= 256 * 1024)
+                val plan = kotlinx.serialization.json.Json.decodeFromString<WanxiangAdvancedFiles.Plan>(planFile.readText())
+                this@DirectRimeBackend.config.requireUpdateTarget(plan.profile, plan.path)
+                WanxiangAdvancedFiles.verify(this@DirectRimeBackend.config.user, plan.expected)
+                val payload = WanxiangPayload.child(job, "payload")
+                payload.listFiles().orEmpty().forEach { file ->
+                    require(WanxiangAdvancedFiles.writable(file.name) && plan.expected.containsKey(file.name))
+                    require(WanxiangPayload.child(payload.canonicalFile, file.name) == file.absoluteFile && file.isFile && file.length() <= org.fcitx.fcitx5.android.data.WanxiangYaml.MAX_TEXT)
+                    if (!file.name.endsWith(".dict.yaml")) org.fcitx.fcitx5.android.data.WanxiangYaml().document(file.readText())
+                }
+                if (started) Native.stop()
+                started = false
+                try {
+                    WanxiangUpdateTransaction.install(this@DirectRimeBackend.config.user, payload,
+                        activate = { restartNative() }, deactivate = { if (started) Native.stop(); started = false }, settings = true)
+                } catch (error: Throwable) {
+                    try { WanxiangUpdateTransaction.recover(this@DirectRimeBackend.config.user); restartNative() }
+                    catch (recovery: Throwable) { error.addSuppressed(recovery) }
+                    throw error
+                }
+            } }
+            "rime-custom-update" -> withContext(NonCancellable) { maintain {
+                org.fcitx.fcitx5.android.daemon.FcitxDaemon.requireUserDataAvailable()
+                val id = java.util.UUID.fromString(config.findByName("RequestId")!!.value)
+                val request = org.fcitx.fcitx5.android.ui.main.rimeupdate.RimeSchemeUpdates.request(context, id)
+                this@DirectRimeBackend.config.requireUpdateTarget(request.target.profile, request.target.path)
+                val job = org.fcitx.fcitx5.android.ui.main.rimeupdate.RimeSchemeUpdates.directory(context, id)
+                require(WanxiangPayload.child(job, "prepared").isFile) { "更新资源尚未准备完成" }
+                val staging = WanxiangPayload.child(job, "payload")
+                if (staging.walkTopDown().none { it.isFile }) return@maintain
+                if (started) Native.stop()
+                started = false
+                try {
+                    WanxiangUpdateTransaction.install(this@DirectRimeBackend.config.user, staging,
+                        activate = { restartNative() }, deactivate = { if (started) Native.stop(); started = false }, generic = true)
+                } catch (error: Throwable) {
+                    try { WanxiangUpdateTransaction.recover(this@DirectRimeBackend.config.user); restartNative() }
+                    catch (recovery: Throwable) { error.addSuppressed(recovery) }
+                    throw error
+                }
+            } }
+            "wanxiang-update" -> withContext(NonCancellable) { maintain {
+                org.fcitx.fcitx5.android.daemon.FcitxDaemon.requireUserDataAvailable()
+                this@DirectRimeBackend.config.requireUpdateTarget(config.findByName("Profile")!!.value, config.findByName("Path")!!.value)
+                val id = java.util.UUID.fromString(config.findByName("RequestId")!!.value)
+                val staging = WanxiangPayload.child(context.noBackupFilesDir.canonicalFile, "wanxiang-updates/$id/payload")
+                val selection = org.fcitx.fcitx5.android.ui.main.wanxiang.WanxiangUpdates.jobSelection(context, id)
+                org.fcitx.fcitx5.android.data.WanxiangProtection(selection.protection).filter(staging, this@DirectRimeBackend.config.user)
+                org.fcitx.fcitx5.android.ui.main.wanxiang.WanxiangExtraDictionaries.verifyAuxiliary(staging.parentFile!!, staging, this@DirectRimeBackend.config.user)
+                if (staging.walkTopDown().none { it.isFile }) return@maintain
+                if (started) Native.stop()
+                started = false
+                try {
+                    WanxiangUpdateTransaction.install(this@DirectRimeBackend.config.user, staging,
+                        activate = { restartNative() },
+                        deactivate = { if (started) Native.stop(); started = false }, overrides = true)
+                } catch (error: Throwable) {
+                    try {
+                        // Recovery must succeed before opening any database or model again.
+                        WanxiangUpdateTransaction.recover(this@DirectRimeBackend.config.user)
+                        restartNative()
+                    } catch (recovery: Throwable) { error.addSuppressed(recovery) }
+                    throw error
+                }
+            } }
             "deploy" -> redeploy()
             "sync" -> synchronize()
             "schema-selector" -> maintain {

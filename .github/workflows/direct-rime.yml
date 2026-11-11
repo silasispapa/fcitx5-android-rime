@@ -1,8 +1,14 @@
 name: Direct Rime CI
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Select the complete diagnostic suite or only the engine device smoke test
+        type: choice
+        options: [all, engine-smoke]
+        default: all
   pull_request:
-    paths: ['app/**', 'direct-rime/**', 'patches/**', 'tools/input-perf/**', 'tools/test-direct-rime-frontend.sh', 'tools/verify-direct-rime-apk.py', 'tools/audit-direct-rime-link.py', '.github/workflows/direct-rime.yml', 'settings.gradle.kts', 'native/**', 'build-logic/**', 'gradle/**', '.gitmodules']
+    paths: ['app/**', 'direct-rime/**', 'patches/**', 'tools/input-perf/**', 'tools/test-direct-rime-frontend.sh', 'tools/test-rime-sdk-smoke.sh', 'tools/check-junit-results.py', 'tools/verify-direct-rime-apk.py', 'tools/audit-direct-rime-link.py', '.github/workflows/direct-rime.yml', 'settings.gradle.kts', 'native/**', 'build-logic/**', 'gradle/**', '.gitmodules']
 permissions:
   contents: read
 concurrency:
@@ -10,13 +16,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   prototype:
+    if: inputs.scope != 'engine-smoke'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
       - name: Fetch pinned submodules from the configured engine fork
         run: |
           git submodule init
-          git submodule update --init --depth 1 native/prebuilt native/rime-prelude
+          git submodule update --init --depth 1 native/rime-prelude
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -27,8 +34,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Test native engine safety contract
         run: |
+          ./gradlew prepareRimeSdk
           c++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -g \
-            -I native/prebuilt/librime/arm64-v8a/include \
+            -I native/rime-sdk/librime/arm64-v8a/include \
             direct-rime/src/main/cpp/engine.cpp direct-rime/src/main/cpp/engine_test.cpp -o /tmp/engine-test
           /tmp/engine-test
           c++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -g \
@@ -39,7 +47,9 @@ jobs:
       - name: Verify LevelDB open reuse, explicit sync and recovery fallback
         run: python3 tools/input-perf/test-leveldb-open.py "$RUNNER_TEMP/leveldb-open-contract"
       - name: Build isolated APK and run JVM tests
-        run: ./gradlew -PdirectRimePrototype=true -PbuildABI=arm64-v8a :direct-rime:assembleDebug :direct-rime:testDebugUnitTest :direct-rime:assembleDebugAndroidTest
+        run: |
+          ./gradlew -PdirectRimePrototype=true -PbuildABI=arm64-v8a :direct-rime:assembleDebug :direct-rime:testDebugUnitTest :direct-rime:assembleDebugAndroidTest
+          python3 tools/check-junit-results.py direct-rime/build/test-results/testDebugUnitTest
       - uses: actions/upload-artifact@v7
         with:
           name: direct-rime-arm64-debug
@@ -47,6 +57,7 @@ jobs:
             direct-rime/build/outputs/apk/debug/*.apk
             direct-rime/build/outputs/apk/androidTest/debug/*.apk
             direct-rime/build/reports/tests/testDebugUnitTest/
+            direct-rime/build/test-results/testDebugUnitTest/
             ${{ runner.temp }}/leveldb-open-contract/results.json
   android_smoke:
     runs-on: ubuntu-22.04
@@ -55,7 +66,7 @@ jobs:
       - name: Fetch pinned submodules
         run: |
           git submodule init
-          git submodule update --init --depth 1 native/prebuilt native/rime-prelude
+          git submodule update --init --depth 1 native/rime-prelude
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -75,13 +86,16 @@ jobs:
           target: aosp_atd
           arch: x86_64
           disable-animations: true
-          script: ./gradlew -PdirectRimePrototype=true -PbuildABI=x86_64 :direct-rime:connectedDebugAndroidTest
+          script: bash tools/test-rime-sdk-smoke.sh
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: direct-rime-android-smoke-results
-          path: direct-rime/build/reports/androidTests/connected/
+          path: |
+            direct-rime/build/reports/androidTests/
+            direct-rime/build/outputs/androidTest-results/connected/
   frontend:
+    if: inputs.scope != 'engine-smoke'
     name: Full frontend ARM64 APK
     runs-on: ubuntu-22.04
     steps:
@@ -96,14 +110,16 @@ jobs:
         with:
           packages: platform-tools
       - name: Fetch only the pinned Rime dependencies
-        run: git submodule update --init --depth 1 native/prebuilt native/rime-prelude
+        run: git submodule update --init --depth 1 native/rime-prelude
       - name: Verify Fcitx sources are absent
         run: |
           test ! -f lib/fcitx5/src/main/cpp/fcitx5/CMakeLists.txt
           test ! -f plugin/rime/src/main/cpp/fcitx5-rime/CMakeLists.txt
       - uses: gradle/actions/setup-gradle@v6
       - name: Build the original UI on direct librime and run JVM tests
-        run: ./gradlew -PbuildABI=arm64-v8a :app:assembleFxDebug :app:testFxDebugUnitTest
+        run: |
+          ./gradlew -PbuildABI=arm64-v8a :app:assembleFxDebug :app:testFxDebugUnitTest
+          python3 tools/check-junit-results.py
       - name: Verify APK dependencies and assets
         run: |
           python3 tools/verify-direct-rime-apk.py app/build/outputs/apk/fx/debug/*.apk
@@ -114,8 +130,10 @@ jobs:
           path: |
             app/build/outputs/apk/fx/debug/*.apk
             app/build/reports/tests/testFxDebugUnitTest/
+            app/build/test-results/testFxDebugUnitTest/
             native-link-audit.json
   frontend_android:
+    if: inputs.scope != 'engine-smoke'
     name: Full frontend touch and engine tests
     runs-on: ubuntu-22.04
     steps:
@@ -128,7 +146,7 @@ jobs:
         with:
           packages: platform-tools
       - name: Fetch only the pinned Rime dependencies
-        run: git submodule update --init --depth 1 native/prebuilt native/rime-prelude
+        run: git submodule update --init --depth 1 native/rime-prelude
       - uses: gradle/actions/setup-gradle@v6
       - name: Enable KVM
         run: |
@@ -146,4 +164,6 @@ jobs:
         if: always()
         with:
           name: direct-rime-frontend-android-results
-          path: app/build/reports/androidTests/
+          path: |
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/connected/

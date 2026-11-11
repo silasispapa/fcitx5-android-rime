@@ -1070,22 +1070,30 @@ class TextKeyboard private constructor(
                     for (key in candidateKeys) {
                         val element = json[key] ?: continue
                         // 取该布局的 default 变体（忽略方案子模式），与 ascii 模式一致。
-                        val rows = findLayoutElementByKey(json, key) ?: continue
-                        resolvedLayoutHeightPercentOverride =
-                            parseLayoutHeightPercentOverride(element)
-                        state.auxBarConfig = parseAuxBarConfig(element)
-                        state.auxBarKeys = parseAuxBarKeys(element)
-                        val cacheKey = "${cacheKeyPrefix()}pwd:$key:${variant.name}:$showLangSwitch:$lastRawModified:legacyUp=$legacyTargetIsUp"
-                        return cachedKeyDefLayouts.getOrPut(cacheKey) {
-                            rows.map { rowElement ->
-                                LayoutJsonUtils.parseKeyJsonArray(rowElement.jsonArray, showLangSwitch)
-                                    .mapNotNull {
-                                        LayoutJsonUtils.createKeyDef(
-                                            it,
-                                            legacyTargetIsUp = legacyTargetIsUp
-                                        )
-                                    }
+                        try {
+                            val rows = findLayoutElementByKey(json, key) ?: continue
+                            resolvedLayoutHeightPercentOverride =
+                                parseLayoutHeightPercentOverride(element)
+                            state.auxBarConfig = parseAuxBarConfig(element)
+                            state.auxBarKeys = parseAuxBarKeys(element)
+                            val cacheKey = "${cacheKeyPrefix()}pwd:$key:${variant.name}:$showLangSwitch:$lastRawModified:legacyUp=$legacyTargetIsUp"
+                            val keys = cachedKeyDefLayouts.getOrPut(cacheKey) {
+                                rows.map { rowElement ->
+                                    LayoutJsonUtils.parseKeyJsonArray(rowElement.jsonArray, showLangSwitch)
+                                        .mapNotNull {
+                                            LayoutJsonUtils.createKeyDef(
+                                                it,
+                                                legacyTargetIsUp = legacyTargetIsUp
+                                            )
+                                        }
+                                }
                             }
+                            // A row made only of spacers cannot enter a password.
+                            if (keys.any { row -> row.any { it !is PlaceholderKey } }) return keys
+                        } catch (e: Exception) {
+                            // A valid JSON object can still contain malformed key definitions.
+                            // Keep the password keyboard usable, including before first unlock.
+                            timber.log.Timber.w(e, "Invalid password keyboard layout: %s", key)
                         }
                     }
                 }
@@ -1382,9 +1390,7 @@ class TextKeyboard private constructor(
         }
     }
 
-    private var punctuationMapping: Map<String, String> = mapOf()
     private var lastLayoutSignature: String? = null
-    private fun transformPunctuation(p: String) = punctuationMapping.getOrDefault(p, p)
 
     private fun selectedLayoutArray(ime: InputMethodEntry): JsonArray? {
         val json = textLayoutJson ?: return null
@@ -1836,11 +1842,6 @@ class TextKeyboard private constructor(
         }
     }
 
-    override fun onPunctuationUpdate(mapping: Map<String, String>) {
-        punctuationMapping = mapping
-        updatePunctuationKeys()
-    }
-
     /** Aux bar config resolved by this keyboard's own last layout pass. */
     internal val resolvedAuxBarConfig: AuxBarConfig?
         get() = layoutState.auxBarConfig
@@ -1910,7 +1911,7 @@ class TextKeyboard private constructor(
         ensureSpecialKeyViewsInitialized()
         updateCapsButtonIcon()
         updateAlphabetKeys()
-        updatePunctuationKeys()
+        refreshSymbolKeyLabels()
         refreshSpaceLabelFromState()
     }
 
@@ -1931,7 +1932,7 @@ class TextKeyboard private constructor(
     private fun transformPopupPreview(c: String): String {
         if (c.length != 1) return c
         if (c[0].isLetter()) return transformAlphabet(c)
-        return transformPunctuation(c)
+        return c
     }
 
     override fun onPopupAction(action: PopupAction) {
@@ -2082,19 +2083,20 @@ class TextKeyboard private constructor(
         }
     }
 
-    private fun updatePunctuationKeys() {
+    /** Rebind layout-owned symbol labels after style refresh, without changing sent keys. */
+    private fun refreshSymbolKeyLabels() {
         textKeys.forEach {
             if (it.def.staticDisplay) return@forEach
             if (it is AltTextKeyView) {
                 it.def as KeyDef.Appearance.AltText
-                it.altText.text = transformPunctuation(it.def.altText)
-                it.altText1.text = it.def.altText1?.let(::transformPunctuation) ?: ""
+                it.altText.text = it.def.altText
+                it.altText1.text = it.def.altText1 ?: ""
             } else {
                 it.def as KeyDef.Appearance.Text
                 it.mainText.text = it.def.displayText.let { str ->
                     val first = str.firstOrNull() ?: return@forEach
                     if (first.run { isLetter() || isWhitespace() }) return@forEach
-                    transformPunctuation(str)
+                    str
                 }
             }
         }

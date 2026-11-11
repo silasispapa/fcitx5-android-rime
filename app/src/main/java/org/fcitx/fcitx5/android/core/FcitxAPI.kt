@@ -28,6 +28,7 @@ interface FcitxAPI {
     fun invalidateInputSession(): Long = 0
     val inputSession: Long get() = 0
     val candidateActionContext: CandidateActionContext get() = CandidateActionContext(inputSession, 0)
+    val candidateTabActionContext: CandidateTabActionContext get() = CandidateTabActionContext(inputSession, 0)
     val acceptsInput: Boolean get() = true
     suspend fun startInputSession(generation: Long, program: String) {}
 
@@ -56,8 +57,8 @@ interface FcitxAPI {
      * Save the input method profile and non-Rime addon state.
      *
      * Settings activity uses this so leaving settings does not trigger Rime's
-     * user-data synchronization. Full [save] remains available for shutdown
-     * and export paths that explicitly need to persist every addon.
+     * user-data synchronization. Full [save] remains available for backup and
+     * export paths that explicitly request Rime user-data synchronization.
      */
     suspend fun saveNonRimeState()
 
@@ -73,10 +74,20 @@ interface FcitxAPI {
 
     suspend fun select(idx: Int): Boolean
     suspend fun selectGlobal(idx: Int): Boolean = select(idx)
+    suspend fun selectCandidateIfCurrent(idx: Int, global: Boolean, expected: CandidateActionContext): Boolean {
+        if (idx < 0 || candidateActionContext != expected) return false
+        return if (global) selectGlobal(idx) else select(idx)
+    }
     suspend fun triggerGlobalCandidateAction(idx: Int, actionIdx: Int) = triggerCandidateAction(idx, actionIdx)
     suspend fun isEmpty(): Boolean
     suspend fun reset()
+    /** [position] counts Unicode code points in the displayed client preedit. */
     suspend fun moveCursor(position: Int)
+    suspend fun moveCursorIfCurrent(position: Int, expectedSession: Long, expectedPreedit: String): Boolean {
+        if (inputSession != expectedSession || clientPreeditCached.toString() != expectedPreedit) return false
+        moveCursor(position)
+        return true
+    }
 
     suspend fun availableIme(): Array<InputMethodEntry>
     suspend fun enabledIme(): Array<InputMethodEntry>
@@ -141,5 +152,11 @@ interface FcitxAPI {
     suspend fun offsetCandidatePage(delta: Int)
 
     suspend fun triggerCandidateListTabAction(id: Int)
+
+    suspend fun triggerCandidateListTabActionIfCurrent(target: CandidateTabActionTarget): Boolean {
+        if (candidateTabActionContext != target.context) return false
+        triggerCandidateListTabAction(target.id)
+        return true
+    }
 
 }

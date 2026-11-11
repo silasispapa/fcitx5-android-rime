@@ -10,6 +10,26 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class SubModeSchemaLabelsTest {
+    @Test fun selectedSchemaUsesCheckedActionEvenWhenRootDisplaysLatinMode() {
+        val schemas = schemaMenu(
+            action(100, "one", "One").copy(isCheckable = true),
+            action(101, "two", "Two").copy(isCheckable = true, isChecked = true)
+        )
+        val menu = schemas[0].menu!!.copyOf()
+        menu[0] = menu[0].copy(shortText = "中文模式", longText = "中文模式", isCheckable = true, isChecked = true)
+        val latin = arrayOf(schemas[0].copy(shortText = "英文模式", longText = "英文模式", menu = menu))
+        assertEquals(listOf("One" to 100, "Two" to 101), SubModeManager.resolveSchemaMenuEntries(latin))
+        assertEquals(101, SubModeManager.resolveSelectedSchemaAction(latin))
+    }
+
+    @Test fun asciiPseudoEntryIsNotASelectedSchemaAndMissingSelectionStaysUnset() {
+        val schemas = schemaMenu(action(100, "one", "One"))
+        val menu = schemas[0].menu!!.copyOf()
+        menu[0] = menu[0].copy(shortText = "中文模式", longText = "中文模式", isCheckable = true, isChecked = true)
+        assertNull(SubModeManager.resolveSelectedSchemaAction(arrayOf(schemas[0].copy(menu = menu))))
+        assertNull(SubModeManager.resolveSelectedSchemaAction(emptyArray()))
+    }
+
     private val names = listOf("万象拼音", "万象九键")
     private val ids = listOf("wanxiang", "wanxiang_t9")
 
@@ -19,7 +39,7 @@ class SubModeSchemaLabelsTest {
 
     private fun schemaMenu(vararg schemas: Action): Array<Action> = arrayOf(
         action(1, "rime", names.first(), menu = arrayOf(
-            action(10, "ascii_mode", "西文"), *schemas,
+            action(10, "ascii_mode", "英文模式"), *schemas,
             action(9, "separator", separator = true), action(11, "deploy", "重新部署")
         ))
     )

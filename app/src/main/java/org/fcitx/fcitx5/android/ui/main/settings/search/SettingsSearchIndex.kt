@@ -273,7 +273,7 @@ object SettingsSearchIndex {
      */
     fun entries(context: Context): List<SettingsSearchEntry> =
         buildEntries(context).map { original ->
-            val entry = if (original.route == keyboard(VOICE) || original.activityClass == JsVoicePluginsActivity::class.java) {
+            val entry = if (original.route == keyboard(VOICE)) {
                 original.copy(pathRes = if (original.titleRes == R.string.keyboard_category_voice) P_INPUT
                     else P_INPUT + R.string.keyboard_category_voice)
             } else original
@@ -282,6 +282,11 @@ object SettingsSearchIndex {
         }
 
     private fun buildEntries(context: Context): List<SettingsSearchEntry> = listOf(
+        SettingsSearchEntry(
+            R.string.stats_title, P_CONVENIENCE,
+            listOf("统计", "字词云", "词云", "字云", "热力", "速度", "statistics", "word cloud"),
+            activityClass = org.fcitx.fcitx5.android.ui.main.stats.InputStatsActivity::class.java
+        ),
 
         // The single Rime engine settings entry.
         SettingsSearchEntry(
@@ -775,9 +780,10 @@ object SettingsSearchIndex {
             route = keyboard(VOICE)
         ),
         SettingsSearchEntry(
-            R.string.js_voice_plugins_title, P_KEYBOARD,
+            R.string.js_voice_plugins_title, P_CONVENIENCE,
             listOf(
                 "js voice", "voice plugin", "api key", "import", "custom plugin",
+                "JS 插件设置", "AI 助手", "LLM", "大模型", "端点", "润色", "翻译",
                 "语音插件", "语音密钥", "导入插件", "自定义插件", "语音",
                 "yuyin chajian", "daoru chajian", "qwen", "doubao", "通义", "千问", "豆包", "asr"
             ),
@@ -1007,6 +1013,22 @@ object SettingsSearchIndex {
             route = SettingsRoute.DataBackup
         ),
 
+        SettingsSearchEntry(
+            R.string.scheme_update_title, P_DATA,
+            listOf("rime", "Rime方案更新", "自定义更新", "本地方案", "批量更新", "zip", "custom update"),
+            activityClass = org.fcitx.fcitx5.android.ui.main.rimeupdate.RimeSchemeUpdateActivity::class.java
+        ),
+        SettingsSearchEntry(
+            R.string.wanxiang_update, P_DATA,
+            listOf("wanxiang", "万象", "Rime方案更新", "方案更新", "词库更新", "模型下载"),
+            route = SettingsRoute.DataBackup
+        ),
+        SettingsSearchEntry(
+            R.string.wanxiang_advanced, P_DATA,
+            listOf("wanxiang settings", "万象高级设置", "拼写方案", "辅助码", "模糊音", "万象补丁"),
+            route = SettingsRoute.DataBackup
+        ),
+
         /* ===== Android：高级 ===== */
         SettingsSearchEntry(
             R.string.advanced, P_ANDROID,
@@ -1069,7 +1091,12 @@ object SettingsSearchIndex {
             route = SettingsRoute.About
         ),
         SettingsSearchEntry(
-            R.string.license, P_ANDROID,
+            R.string.faq, listOf(R.string.about),
+            listOf("faq", "常见问题", "帮助", "疑问"),
+            route = SettingsRoute.About
+        ),
+        SettingsSearchEntry(
+            R.string.license, listOf(R.string.about),
             listOf("license", "许可", "xuke", "开源协议"),
             route = SettingsRoute.License
         )

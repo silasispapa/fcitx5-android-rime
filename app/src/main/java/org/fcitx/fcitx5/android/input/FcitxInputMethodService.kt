@@ -60,14 +60,17 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.EmptyCoroutineContext
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.BuildConfig
 import org.fcitx.fcitx5.android.core.CapabilityFlags
+import org.fcitx.fcitx5.android.core.CapabilityFlag
 import org.fcitx.fcitx5.android.core.FcitxAPI
 import org.fcitx.fcitx5.android.core.FcitxEvent
 import org.fcitx.fcitx5.android.core.FcitxKeyMapping
 import org.fcitx.fcitx5.android.core.FormattedText
 import org.fcitx.fcitx5.android.core.InputMethodEntry
+import org.fcitx.fcitx5.android.core.InputStatisticsSource
 import org.fcitx.fcitx5.android.core.KeyState
 import org.fcitx.fcitx5.android.core.KeyStates
 import org.fcitx.fcitx5.android.core.KeySym
@@ -80,6 +83,8 @@ import org.fcitx.fcitx5.android.daemon.FcitxConnection
 import org.fcitx.fcitx5.android.daemon.FcitxDaemon
 import org.fcitx.fcitx5.android.daemon.FcitxDisconnectedException
 import org.fcitx.fcitx5.android.data.InputFeedbacks
+import org.fcitx.fcitx5.android.data.stats.InputStats
+import org.fcitx.fcitx5.android.data.stats.StatsLayout
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesMode
 import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
@@ -87,7 +92,9 @@ import org.fcitx.fcitx5.android.data.prefs.ManagedPreferenceProvider
 import org.fcitx.fcitx5.android.data.theme.Theme
 import org.fcitx.fcitx5.android.data.theme.ThemeManager
 import org.fcitx.fcitx5.android.input.clipboard.ClipboardSearchController
+import org.fcitx.fcitx5.android.data.clipboard.ClipboardCategory
 import org.fcitx.fcitx5.android.input.cursor.CursorRange
+import org.fcitx.fcitx5.android.input.voice.js.JsAppInputConnection
 import org.fcitx.fcitx5.android.input.cursor.CursorTracker
 import org.fcitx.fcitx5.android.input.keyboard.SpaceLongPressBehavior
 import org.fcitx.fcitx5.android.input.keyboard.TextKeyboard
@@ -142,6 +149,15 @@ private val NUMPAD_KEYCODE_RANGE = KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_N
  */
 private const val STANDALONE_MODIFIER_HOLD_MS = 50L
 
+/**
+ * A service queue owns the start of every lazy job it still contains. If the queue can no
+ * longer deliver one, cancel only a job that has not been started elsewhere. A job already
+ * received by the consumer is no longer subject to the channel's undelivered callback.
+ */
+private fun cancelUndeliveredFcitxJob(job: Job) {
+    if (!job.isActive) job.cancel()
+}
+
 class FcitxInputMethodService : LifecycleInputMethodService() {
 
     private val inputDeliveryDiagnostics = org.fcitx.fcitx5.android.core.InputDiagnostics.Collector()
@@ -152,15 +168,27 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
 
     internal lateinit var fcitx: FcitxConnection
 
-    private var jobs = Channel<Job>(capacity = Channel.UNLIMITED)
+    private var jobs = Channel<Job>(
+        capacity = Channel.UNLIMITED,
+        onUndeliveredElement = ::cancelUndeliveredFcitxJob
+    )
     private var inputBindingGeneration = 0
     private var inputSessionGeneration = 0
     internal val editorSession = EditorSessionTracker()
+    private var statisticsStore: InputStats? = null
+    private var statisticsSourceStore: InputStats? = null
+    private var statisticsSourceCache: InputStatisticsSource? = null
+    private var lastStatisticsLayout: Pair<String, StatsLayout>? = null
+    private var lastStatisticsLayoutEpoch = -1L
+    private var statisticsSchemaActions: Array<org.fcitx.fcitx5.android.core.Action>? = null
+    private var statisticsSchema: Pair<String, String>? = null
     internal val macroInput = org.fcitx.fcitx5.android.input.keyboard.MacroInputController {
         Timber.w(it, "Failed to release a macro key")
     }
 
     private fun endEditorWork() {
+        statisticsStore?.endSession()
+        jsAppDismiss?.invoke()
         macroInput.cancelAll()
         if (VoiceInputProviderManager.isActive()) VoiceInputProviderManager.stop(this)
     }
@@ -348,7 +376,9 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     val currentInputSelection: CursorRange
-        get() = selection.latest
+        get() = if (jsAppInputConnection != null)
+            (jsAppInputConnection as? JsAppInputConnection)?.selection ?: CursorRange()
+        else selection.latest
 
     private val composing = CursorRange()
     private var composingText = FormattedText.Empty
@@ -498,8 +528,13 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
      * subsequent operations can start if the prior operation is not finished (suspended),
      * [postFcitxJob] ensures that operations are executed sequentially.
      */
-    fun postFcitxJob(block: suspend FcitxAPI.() -> Unit): Job {
-        val job = fcitx.lifecycleScope.launch(start = CoroutineStart.LAZY) {
+    private fun postFcitxJob(category: String, block: suspend FcitxAPI.() -> Unit): Job {
+        val diagnostic = org.fcitx.fcitx5.android.core.InputDiagnostics.serviceTask(category)
+        val job = fcitx.lifecycleScope.launch(
+            context = diagnostic ?: EmptyCoroutineContext,
+            start = CoroutineStart.LAZY
+        ) {
+            diagnostic?.started()
             try {
                 fcitx.runOnReady(block)
             } catch (e: FcitxDisconnectedException) {
@@ -511,12 +546,20 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                 Timber.d(e, "Dropping queued fcitx job: connection is gone")
             }
         }
-        jobs.trySend(job)
+        if (diagnostic != null) job.invokeOnCompletion { diagnostic.completed(it) }
+        // Channel.trySend does not invoke onUndeliveredElement when the channel is already
+        // closed. Complete the lazy job here so ticket and caller completion handlers settle.
+        if (jobs.trySend(job).isFailure) {
+            diagnostic?.rejected()
+            cancelUndeliveredFcitxJob(job)
+        }
         return job
     }
 
+    fun postFcitxJob(block: suspend FcitxAPI.() -> Unit): Job = postFcitxJob("operation", block)
+
     /** Capture at the time of the key, before either the service or native owner queues it. */
-    fun postFcitxKeyJob(block: suspend FcitxAPI.() -> Unit): Job {
+    private fun postFcitxKeyJob(category: String, block: suspend FcitxAPI.() -> Unit): Job {
         // Showing an inherited keyboard window on a TYPE_NULL/non-editor focus
         // is not typing demand. Promote only a real key, before its ticket is
         // captured, and bind ahead of it in this same ordered service queue.
@@ -524,9 +567,116 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
             postFcitxSessionJob(inputSessionGeneration) { focus(true) }
         }
         val ticket = FcitxDaemon.captureInputKey() ?: return Job().apply { complete() }
-        return postFcitxJob {
-            if (FcitxDaemon.canDeliverInputKey(ticket)) block()
+        val statisticsSource = captureStatisticsSource(ticket.generation)
+        return postFcitxJob(category) {
+            if (FcitxDaemon.canDeliverInputKey(ticket)) {
+                if (statisticsSource == null) block()
+                else {
+                    val api = this
+                    withContext(statisticsSource) { block(api) }
+                }
+            }
         }.also { job -> job.invokeOnCompletion { FcitxDaemon.releaseInputKey(ticket) } }
+    }
+
+    fun postFcitxKeyJob(block: suspend FcitxAPI.() -> Unit): Job = postFcitxKeyJob("key", block)
+
+    /** All privacy checks are repeated at delivery, before statistics receives any text. */
+    private fun activeStatistics(): InputStats? {
+        if (statisticsStore?.isEnabled == false) return null
+        return try {
+            val editor = currentInputEditorInfo
+            if (editor == null || editor.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_NULL ||
+                org.fcitx.fcitx5.android.FcitxApplication.getInstance().isDirectBootMode ||
+                capabilityFlags.flags and (CapabilityFlag.PasswordOrSensitive.flag or CapabilityFlag.Disable.flag) != 0UL ||
+                jsAppInputConnection != null) null
+            else {
+                val store = statisticsStore ?: InputStats.get(this).also { statisticsStore = it }
+                store.takeIf { it.isEnabled && editorSession.isActive && applicationInputConnection != null }
+            }
+        } catch (_: Exception) { null }
+    }
+
+    private fun captureStatisticsSource(generation: Long): InputStatisticsSource? {
+        val store = activeStatistics() ?: return null
+        val epoch = store.recordingEpoch
+        val cached = statisticsSourceCache
+        if (statisticsSourceStore === store && cached?.generation == generation && cached.epoch == epoch) return cached
+        return InputStatisticsSource(generation, epoch) { store.isEnabled && store.recordingEpoch == epoch }.also {
+            statisticsSourceStore = store
+            statisticsSourceCache = it
+        }
+    }
+
+    internal fun isStatisticsRecordingEnabled(): Boolean = activeStatistics() != null
+
+    internal fun recordStatisticsHeat(label: String, layout: StatsLayout) {
+        val store = activeStatistics() ?: return
+        if (!::fcitx.isInitialized) return
+        val epoch = store.recordingEpoch
+        try {
+            val schema = fcitx.runImmediately {
+                if (!acceptsInput) return@runImmediately null
+                val actions = statusAreaActionsCached
+                if (actions === statisticsSchemaActions) return@runImmediately statisticsSchema
+                statisticsSchemaActions = actions
+                statisticsSchema = null
+                val selected = org.fcitx.fcitx5.android.ui.main.settings.behavior.manager.SubModeManager.resolveSelectedSchemaAction(actions)
+                    ?: return@runImmediately null
+                fun find(items: Array<org.fcitx.fcitx5.android.core.Action>): org.fcitx.fcitx5.android.core.Action? =
+                    items.firstNotNullOfOrNull { item -> if (item.id == selected) item else item.menu?.let(::find) }
+                find(actions)?.let { it.name to it.shortText }.also { statisticsSchema = it }
+            } ?: return
+            store.recordHeat(schema.first, schema.second, label, expectedEpoch = epoch)
+            val current = schema.first to layout
+            if (layout.geometry.isNotEmpty() && (current != lastStatisticsLayout || epoch != lastStatisticsLayoutEpoch)) {
+                lastStatisticsLayout = current
+                lastStatisticsLayoutEpoch = epoch
+                lifecycleScope.launch {
+                    try { store.setLayout(schema.first, layout, expectedEpoch = epoch) }
+                    catch (_: Exception) { /* Statistics never interrupts the keyboard. */ }
+                }
+            }
+        } catch (_: Exception) { /* A statistics failure must not reject a press. */ }
+    }
+
+    private fun recordStatisticsKey(event: FcitxEvent.StatisticsKeyEvent) {
+        if (event.inputSession == 0L || !FcitxDaemon.isCurrentInputSession(event.inputSession)) return
+        val store = activeStatistics() ?: return
+        val data = event.statistics
+        try {
+            store.recordKey(data.schemaId, data.schemaName, KeySym(event.sym).toString(),
+                isDeletion = event.sym == FcitxKeyMapping.FcitxKey_BackSpace || event.sym == FcitxKeyMapping.FcitxKey_Delete,
+                composing = data.composing, wallTimeMs = data.wallTimeMs, monotonicTimeMs = data.monotonicTimeMs,
+                expectedEpoch = data.epoch)
+        } catch (_: Exception) { /* Statistics is optional; editor events still continue. */ }
+    }
+
+    private fun recordStatisticsKeys(event: FcitxEvent.StatisticsKeysEvent) {
+        if (event.inputSession == 0L || !FcitxDaemon.isCurrentInputSession(event.inputSession)) return
+        val store = activeStatistics() ?: return
+        if (store.recordingEpoch != event.epoch) return
+        try {
+            val samples = event.keys.map { key ->
+                val data = key.statistics
+                org.fcitx.fcitx5.android.data.stats.StatsKeySample(data.schemaId, data.schemaName, "rime",
+                    key.sym == FcitxKeyMapping.FcitxKey_BackSpace || key.sym == FcitxKeyMapping.FcitxKey_Delete,
+                    data.composing, data.wallTimeMs, data.monotonicTimeMs)
+            }
+            store.recordKeys(samples, expectedEpoch = event.epoch)
+            if (event.dropped > 0) store.recordDropped(event.dropped, expectedEpoch = event.epoch)
+        } catch (_: Exception) { /* Optional metrics cannot delay or replay editor operations. */ }
+    }
+
+    private fun recordStatisticsCommit(event: FcitxEvent.CommitStringEvent, accepted: Boolean) {
+        if (!accepted || event.inputSession == 0L || !FcitxDaemon.isCurrentInputSession(event.inputSession)) return
+        val data = event.statistics?.takeUnless { it.command } ?: return
+        val store = activeStatistics() ?: return
+        try {
+            store.recordCommit(data.schemaId, data.schemaName, event.data.text, data.codeLength,
+                wallTimeMs = data.wallTimeMs, monotonicTimeMs = data.monotonicTimeMs, expectedEpoch = data.epoch,
+                composing = data.composing)
+        } catch (_: Exception) { /* Never retry or alter an already delivered commit. */ }
     }
 
     /** Same ordered queue as keys, with bounded timing for the first candidate taps. */
@@ -538,12 +688,19 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
         val ordinal = ++timedSelections
         val capturedAt = if (ordinal <= 2) SystemClock.elapsedRealtimeNanos() else 0L
-        return postFcitxKeyJob {
+        return postFcitxKeyJob("candidate") {
             if (capturedAt != 0L) android.util.Log.i("RimeInputTiming",
                 "select_queue generation=$generation ordinal=$ordinal service_wait_us=${(SystemClock.elapsedRealtimeNanos() - capturedAt) / 1000}")
             block()
         }
     }
+
+    fun postCandidateSelection(target: org.fcitx.fcitx5.android.core.CandidateSelectionTarget): Job =
+        postCandidateSelection { selectCandidateIfCurrent(target.index, target.global, target.context) }
+
+    /** Same editor-gated service queue as keys and candidates, retaining the displayed tab target. */
+    fun postCandidateTabAction(target: org.fcitx.fcitx5.android.core.CandidateTabActionTarget): Job =
+        postFcitxKeyJob("tab") { triggerCandidateListTabActionIfCurrent(target) }
 
     private suspend fun FcitxAPI.applyCandidatePagingModeIfNeeded(mode: Int) {
         if (appliedCandidatePagingMode == mode) return
@@ -567,12 +724,18 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
             }
         }
         candidatePagingModeJob = job
-        job.invokeOnCompletion {
+        job.invokeOnCompletion { cause ->
             if (candidatePagingModeJob === job) {
                 candidatePagingModeJob = null
             }
-            pendingCandidatePagingMode?.let {
-                requestCandidatePagingMode(it)
+            if (cause == null) {
+                pendingCandidatePagingMode?.let {
+                    requestCandidatePagingMode(it)
+                }
+            } else {
+                // A rejected or undelivered queue job must not recursively enqueue into the
+                // same closed service queue from its synchronous completion callback.
+                pendingCandidatePagingMode = null
             }
         }
     }
@@ -698,31 +861,20 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                 val ordinal = ++timedCommits
                 val startedAt = if (ordinal <= 2) SystemClock.elapsedRealtimeNanos() else 0L
                 backspaceBoundaryGuard.onCommit()
+                val mainEditor = jsAppInputConnection == null
                 val requestResult = androidx.tracing.trace("rime.direct.commit") {
                     dispatchCommitText(event.data.text, event.data.cursor)
                 }
+                recordStatisticsCommit(event, mainEditor && requestResult == CommitRequestResult.REQUEST_ACCEPTED)
                 if (requestResult == CommitRequestResult.NO_CONNECTION || requestResult == CommitRequestResult.REQUEST_REJECTED)
                     android.util.Log.w("RimeInputQueue", "commit_request_failed generation=${event.inputSession} result=$requestResult")
                 if (startedAt != 0L) android.util.Log.i("RimeInputTiming",
                     "commit generation=${event.inputSession} ordinal=$ordinal event_wait_us=${if (event.commitProducedNanos > 0) (startedAt - event.commitProducedNanos) / 1000 else -1} service_commit_us=${(SystemClock.elapsedRealtimeNanos() - startedAt) / 1000} request_result=$requestResult")
             }
+            is FcitxEvent.StatisticsKeyEvent -> recordStatisticsKey(event)
+            is FcitxEvent.StatisticsKeysEvent -> recordStatisticsKeys(event)
             is FcitxEvent.KeyEvent -> event.data.let event@{
                 if (it.states.virtual) {
-                    // 剪贴板历史搜索会话期间：退格修改查询、回车与方向键直接吞掉，
-                    // 其余字符仍走正常提交流程并在 commitText 中被搜索拦截。
-                    if (ClipboardSearchController.isActive) {
-                        when (it.sym.sym) {
-                            FcitxKeyMapping.FcitxKey_BackSpace -> {
-                                ClipboardSearchController.onBackspace()
-                                return@event
-                            }
-                            FcitxKeyMapping.FcitxKey_Return,
-                            FcitxKeyMapping.FcitxKey_Left,
-                            FcitxKeyMapping.FcitxKey_Right,
-                            FcitxKeyMapping.FcitxKey_Up,
-                            FcitxKeyMapping.FcitxKey_Down -> return@event
-                        }
-                    }
                     // KeyEvent from virtual keyboard
                     //
                     // 退格保护：这里只处理"退格到达"和"其它按键结束退格按住序列"。
@@ -761,27 +913,6 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                     // KeyEvent from physical keyboard (or input method engine forwardKey)
                     // use cached event if available
                     cachedKeyEvents.remove(it.timestamp)?.let { keyEvent ->
-                        // 剪贴板历史搜索会话期间：物理直达按键不得透传给目标编辑器。
-                        // 可打印字符进入查询（ACTION_DOWN 一次），退格修改查询，
-                        // 回车/方向键吞掉；抬起事件与修饰键状态同步可安全丢弃。
-                        if (ClipboardSearchController.isActive) {
-                            if (keyEvent.action == KeyEvent.ACTION_DOWN) {
-                                when (keyEvent.keyCode) {
-                                    KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL ->
-                                        ClipboardSearchController.onPhysicalBackspace()
-                                    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
-                                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-                                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> Unit
-                                    else -> {
-                                        val unicode = keyEvent.unicodeChar
-                                        if (unicode > 0) {
-                                            ClipboardSearchController.onPhysicalChar(unicode.toChar())
-                                        }
-                                    }
-                                }
-                            }
-                            return@event
-                        }
                         /**
                          * intercept the KeyEvent which would cause the default [android.text.method.QwertyKeyListener]
                          * to show a Gingerbread-style CharacterPickerDialog
@@ -840,20 +971,15 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                 // 误判成"删空"。
                 backspaceGuardClientPreeditNotEmpty = event.data.isNotEmpty()
                 feedBackspaceGuardComposingState()
-                if (!ClipboardSearchController.onPreeditChanged(event.data.toString())) {
-                    updateComposingText(event.data)
-                }
+                updateComposingText(event.data)
             }
             is FcitxEvent.InputPanelEvent -> {
                 backspaceGuardPanelPreeditNotEmpty = event.data.preedit.isNotEmpty()
                 feedBackspaceGuardComposingState()
             }
             is FcitxEvent.DeleteSurroundingEvent -> {
-                // 搜索会话期间绝不触碰目标编辑器的文本。
-                if (!ClipboardSearchController.isActive) {
-                    val (before, after) = event.data
-                    handleDeleteSurrounding(before, after)
-                }
+                val (before, after) = event.data
+                handleDeleteSurrounding(before, after)
             }
             is FcitxEvent.IMChangeEvent -> {
                 // Rime schema/ascii changes keep the same Android IME subtype.
@@ -880,7 +1006,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
 
     private fun handleDeleteSurrounding(before: Int, after: Int) {
         val ic = currentInputConnection ?: return
-        if (before > 0) {
+        if (jsAppInputConnection == null && before > 0) {
             selection.predictOffset(-before)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -906,6 +1032,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     fun handleBackspaceDirectly() {
+        if (jsAppInputConnection != null) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL); return }
         val ic = currentInputConnection ?: return
         val editorInfo = currentInputEditorInfo
         val isTypeNull = editorInfo.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_NULL
@@ -939,6 +1066,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     private fun handleReturnKey() {
+        if (jsAppInputConnection != null) { sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER); return }
         val ic = currentInputConnection ?: run {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
             return
@@ -965,6 +1093,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     private fun handleArrowKey(keyCode: Int) {
+        if (jsAppInputConnection != null) { sendDownUpKeyEvents(keyCode); return }
         val ic = currentInputConnection ?: run {
             sendDownUpKeyEvents(keyCode)
             return
@@ -1024,11 +1153,12 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     // A true InputConnection return value acknowledges the request, not that a
     // remote editor displayed it. Never replay uncertain commits into a new
     // connection: the old editor might already have sent the same text.
-    private enum class CommitRequestResult { SEARCH, NO_CONNECTION, REQUEST_ACCEPTED, REQUEST_REJECTED }
+    private enum class CommitRequestResult { NO_CONNECTION, REQUEST_ACCEPTED, REQUEST_REJECTED }
 
     private fun dispatchCommitText(text: String, cursor: Int): CommitRequestResult {
-        // 剪贴板历史搜索会话期间：所有提交都进入查询，不写入目标编辑器。
-        if (ClipboardSearchController.onCommitText(text)) return CommitRequestResult.SEARCH
+        jsAppInputConnection?.let {
+            return if (it.commitText(text, 1)) CommitRequestResult.REQUEST_ACCEPTED else CommitRequestResult.REQUEST_REJECTED
+        }
         val ic = currentInputConnection ?: return CommitRequestResult.NO_CONNECTION
         var accepted = false
         // when composing text equals commit content, finish composing text as-is
@@ -1115,14 +1245,16 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
      * manager froze the keyboard for the duration of the copy.
      */
     suspend fun commitClipboardEntry(text: String): Boolean {
+        val connection = currentInputConnection ?: return false
+        val token = editorSession.capture() ?: return false
         val staged = withContext(Dispatchers.IO) {
             ClipboardUriStore.stageForCommit(this@FcitxInputMethodService, text)
         }
+        if (!token.isCurrent() || currentInputConnection !== connection) return false
         return if (staged != null && commitStagedUriContent(staged)) {
             true
         } else {
-            commitText(text)
-            false
+            dispatchCommitText(text, -1) == CommitRequestResult.REQUEST_ACCEPTED
         }
     }
 
@@ -1189,6 +1321,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     fun deleteSelection() {
+        if (jsAppInputConnection != null) {
+            (jsAppInputConnection as? JsAppInputConnection)?.deleteSelection()
+            return
+        }
         val lastSelection = selection.latest
         if (lastSelection.isEmpty()) return
         selection.predict(lastSelection.start)
@@ -1217,6 +1353,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     fun applySelectionOffset(offsetStart: Int, offsetEnd: Int = 0) {
+        if (jsAppInputConnection != null) {
+            (jsAppInputConnection as? JsAppInputConnection)?.offsetSelection(offsetStart, offsetEnd)
+            return
+        }
         val lastSelection = selection.latest
         currentInputConnection?.also {
             val start = max(lastSelection.start + offsetStart, 0)
@@ -1228,6 +1368,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     fun cancelSelection() {
+        if (jsAppInputConnection != null) {
+            (jsAppInputConnection as? JsAppInputConnection)?.cancelSelection()
+            return
+        }
         val lastSelection = selection.latest
         if (lastSelection.isEmpty()) return
         val end = lastSelection.end
@@ -1814,23 +1958,15 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
     }
 
-    /**
-     * 开关剪贴板历史搜索会话。关闭时重置引擎，避免搜索期间的 composing
-     * 状态残留到目标编辑器。
-     */
-    fun startClipboardSearch() {
-        ClipboardSearchController.start()
-        onBackspaceGuardSessionChanged()
-        postFcitxJob { reset() }
+    fun startClipboardSearch(category: ClipboardCategory? = null) {
+        inputView?.startClipboardSearch(category)
     }
 
-    fun stopClipboardSearch() {
-        ClipboardSearchController.stop()
-        onBackspaceGuardSessionChanged()
-        postFcitxJob { reset() }
-    }
+    fun stopClipboardSearch() { ClipboardSearchController.stop() }
 
     override fun onStartInput(attribute: EditorInfo, restarting: Boolean) {
+        statisticsStore?.endSession()
+        jsAppDismiss?.invoke()
         android.util.Log.i("FcitxColdStart", "service.onStartInput restarting=$restarting")
         if (editorSession.start(EditorSessionTracker.Editor(attribute.packageName, attribute.fieldId,
                 attribute.inputType, attribute.imeOptions), restarting)) {
@@ -1937,6 +2073,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         candidatesStart: Int,
         candidatesEnd: Int
     ) {
+        if (jsAppInputConnection != null) return
         // onUpdateSelection can left behind when user types quickly enough, eg. long press backspace
         cursorUpdateIndex += 1
         Timber.d("onUpdateSelection: old=[$oldSelStart,$oldSelEnd] new=[$newSelStart,$newSelEnd] cand=[$candidatesStart,$candidatesEnd]")
@@ -2057,16 +2194,18 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         // check if cursor inside composing text
         if (composing.contains(newSelStart)) {
             if (ignoreSystemCursor) return
-            // fcitx cursor position is relative to client preedit (composing text)
+            // Android reports UTF-16 positions relative to the client preedit.
             val position = newSelStart - composing.start
             // move fcitx cursor when cursor position changed
             if (position != composingText.cursor) {
-                // cursor in InvokeActionEvent counts by "UTF-8 characters"
+                // The backend maps displayed code points to raw Rime input bytes.
                 val codePointPosition = composingText.codePointCountUntil(position)
+                val expectedPreedit = composingText.toString()
+                val expectedSession = FcitxDaemon.currentInputSession
                 postFcitxJob {
                     if (updateIndex != cursorUpdateIndex) return@postFcitxJob
                     Timber.d("handleCursorUpdate: move fcitx cursor to $codePointPosition")
-                    moveCursor(codePointPosition)
+                    moveCursorIfCurrent(codePointPosition, expectedSession, expectedPreedit)
                 }
             }
         } else {
@@ -2088,6 +2227,11 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     // because of https://android.googlesource.com/platform/frameworks/base.git/+/refs/tags/android-11.0.0_r45/core/java/android/view/inputmethod/BaseInputConnection.java#851
     // it's not possible to set cursor inside composing text
     private fun updateComposingText(text: FormattedText) {
+        jsAppInputConnection?.let {
+            (it as? JsAppInputConnection)?.updateComposition(text.toSpannedString(highlightColor), text.cursor)
+            return
+        }
+        if (text.isEmpty() && composing.isEmpty() && composingText.isEmpty()) return
         val ic = currentInputConnection ?: return
         val lastSelection = selection.latest
         ic.beginBatchEdit()
@@ -2144,6 +2288,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
      * Also updates internal composing state of [FcitxInputMethodService].
      */
     fun finishComposing() {
+        jsAppInputConnection?.let { it.finishComposingText(); return }
         val ic = currentInputConnection ?: return
         if (composing.isEmpty()) return
         composing.clear()
@@ -2216,6 +2361,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        statisticsStore?.endSession()
         Timber.d("onFinishInputView: finishingInput=$finishingInput")
         macroInput.cancelAll()
         onBackspaceGuardSessionChanged()
@@ -2239,6 +2385,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onFinishInput() {
+        jsAppDismiss?.invoke()
         editorSession.end()
         endEditorWork()
         FcitxDaemon.invalidateInputSession()
@@ -2253,6 +2400,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onUnbindInput() {
+        jsAppDismiss?.invoke()
         editorSession.end()
         endEditorWork()
         FcitxDaemon.invalidateInputSession()
@@ -2271,11 +2419,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onDestroy() {
+        jsAppDismiss?.invoke()
         editorSession.end()
         endEditorWork()
         showingDialog?.dismiss()
-        unregisterDialogBackHandler?.invoke()
-        unregisterDialogBackHandler = null
         FcitxDaemon.invalidateInputSession()
         MainService.stopSyncService(this)
         recreateInputViewPrefs.forEach {
@@ -2286,23 +2433,52 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         ThemeManager.removeOnChangedListener(onThemeChangeListener)
         runCatching { unregisterReceiver(voiceInputCommitReceiver) }
         super.onDestroy()
+        // Lifecycle cancellation stops the consumer; explicitly close its queue as well so
+        // buffered lazy jobs are reported as undelivered before the shared engine disconnects.
+        jobs.cancel()
         // Fcitx might be used in super.onDestroy()
         FcitxDaemon.disconnect(javaClass.name)
     }
 
+    internal var jsAppInputConnection: android.view.inputmethod.InputConnection? = null
+        set(value) {
+            if (field !== value) statisticsStore?.endSession()
+            field = value
+        }
+    internal var jsAppDismiss: (() -> Unit)? = null
+    internal val applicationInputConnection get() = super.getCurrentInputConnection()
+    override fun getCurrentInputConnection(): android.view.inputmethod.InputConnection? =
+        jsAppInputConnection ?: super.getCurrentInputConnection()
+
+    internal fun resetJsAppEditorState() {
+        resetComposingState()
+        val extracted = applicationInputConnection?.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
+        if (extracted != null) selection.resetTo(extracted.startOffset + extracted.selectionStart,
+            extracted.startOffset + extracted.selectionEnd)
+        postFcitxSessionJob(inputSessionGeneration) { reset() }
+    }
+
     private var showingDialog: Dialog? = null
-    private var unregisterDialogBackHandler: (() -> Unit)? = null
 
     // Selection menus keep the editor's window focus. Deliver keys through the
-    // IME so Back and keyboard navigation still belong to the open menu.
-    private fun dispatchDialogKeyEvent(event: KeyEvent): Boolean =
-        showingDialog?.takeIf { it.isShowing }?.dispatchKeyEvent(event) == true
+    // IME so Back and keyboard navigation still belong to the open menu. On
+    // predictive-Back devices InputMethodService's own compatibility callback
+    // converts the gesture to these same onKeyDown/onKeyUp calls.
+    private fun dispatchDialogKeyEvent(event: KeyEvent): Boolean {
+        val dialog = showingDialog?.takeIf { it.isShowing } ?: return false
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            // A non-focusable Dialog does not consume Back DOWN itself. Returning
+            // false would let InputMethodService hide the keyboard before UP can
+            // close the menu, and the same action may then reach the editor app.
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) dialog.cancel()
+            return true
+        }
+        return dialog.dispatchKeyEvent(event)
+    }
 
     fun showDialog(dialog: Dialog) {
         // Menu data is resolved asynchronously; the editor may have gone away.
         if (!decorView.isShown || !decorView.isAttachedToWindow) return
-        unregisterDialogBackHandler?.invoke()
-        unregisterDialogBackHandler = null
         showingDialog?.dismiss()
         // AlertController adds ALT_FOCUSABLE_IM while installing its content.
         // Finish that first so it cannot overwrite our final window policy.
@@ -2326,22 +2502,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         dialog.setOnDismissListener {
             if (showingDialog === dialog) {
                 showingDialog = null
-                unregisterDialogBackHandler?.invoke()
-                unregisterDialogBackHandler = null
             }
         }
         dialog.show()
         showingDialog = dialog
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Predictive Back bypasses onKeyDown/onKeyUp when enabled by the
-            // settings UI. Consume it on the IME window while a menu is open.
-            val dispatcher = window.window!!.onBackInvokedDispatcher
-            val callback = android.window.OnBackInvokedCallback {
-                if (showingDialog === dialog) dialog.cancel()
-            }
-            dispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
-            unregisterDialogBackHandler = { dispatcher.unregisterOnBackInvokedCallback(callback) }
-        }
     }
 
     @Suppress("ConstPropertyName")

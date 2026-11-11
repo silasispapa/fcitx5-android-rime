@@ -38,6 +38,12 @@ open class KeyDef(
     var splitAfter: Boolean = false
 
     /**
+     * When true on the first key of a row, that row stays connected in a split arrangement.
+     * This is row metadata stored on the row's first key so it moves with the row in JSON.
+     */
+    var splitRowDisabled: Boolean = false
+
+    /**
      * Optional key definition that is used while IME is in composing state.
      * This must keep the same key type/size semantics as the base key.
      */
@@ -373,6 +379,8 @@ open class KeyDef(
         class AltPreview(content: String, val alternative: String) : Preview(content)
 
         sealed class Keyboard : Popup() {
+            // Retain transformPunctuation for old layout compatibility. Labels now remain
+            // literal; the selected key is processed by Rime's own punctuator.
             data class Preset(val label: String, val transformPunctuation: Boolean = true) :
                 Keyboard()
 

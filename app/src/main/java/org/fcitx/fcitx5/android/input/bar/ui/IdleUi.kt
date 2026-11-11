@@ -66,7 +66,7 @@ class IdleUi(
 ) : Ui {
 
     enum class State {
-        Toolbar, Clipboard, NumberRow, InlineSuggestion, Search
+        Toolbar, Clipboard, NumberRow, InlineSuggestion
     }
 
     var currentState = State.Toolbar
@@ -119,8 +119,6 @@ class IdleUi(
 
     val inlineSuggestionsBar = InlineSuggestionsUi(ctx)
 
-    val searchUi = ClipboardSearchUi(ctx, theme)
-
     private val voiceStatusText: TextView = textView {
         text = "Recording"
         textSize = 14f
@@ -138,6 +136,10 @@ class IdleUi(
     private var voiceWavePhase = 0
     private var lastVoiceLevelAt = 0L
 
+    val voiceInputFinishButton = ToolButton(ctx, R.drawable.ic_baseline_stop_24, theme).apply {
+        contentDescription = ctx.getString(R.string.voice_input_finish)
+    }
+
     private val voiceStatusBar = horizontalLayout {
         gravity = Gravity.CENTER_VERTICAL
         visibility = View.GONE
@@ -148,6 +150,9 @@ class IdleUi(
                 marginStart = dp(3)
             })
         }
+        // The configurable microphone lives in animator, which is hidden while recording.
+        // Keep the session's finish control inside the visible voice status strip instead.
+        add(voiceInputFinishButton, lParams(KawaiiBarComponent.resolveHeightPx(ctx), matchParent))
     }
 
     private val voiceWaveTicker = object : Runnable {
@@ -165,12 +170,6 @@ class IdleUi(
         add(buttonsUi.root, lParams(matchParent, matchParent))
         add(clipboardUi.root, lParams(matchParent, matchParent))
         add(inlineSuggestionsBar.root, lParams(matchParent, matchParent))
-        add(searchUi.root, lParams(matchParent, matchParent))
-    }
-
-    /** 工具栏搜索框：显示已提交查询与下划线 preedit，搜索会话专用。 */
-    fun updateSearchQuery(committed: String, preedit: String) {
-        searchUi.updateQuery(committed, preedit)
     }
 
     private val inAnimation by lazy {
@@ -240,6 +239,8 @@ class IdleUi(
             }
             button.applyToolbarScale(scale, slotDp)
         }
+        voiceInputFinishButton.updateLayoutParams<LinearLayout.LayoutParams> { width = size }
+        voiceInputFinishButton.applyToolbarScale(scale, slotDp)
         // 下滑隐藏键盘的手势阈值按栏高算；改了栏高却不改阈值，用户会滑不动（或一碰就触发）。
         hideKeyboardButton.swipeThresholdY = size.toFloat()
         buttonsUi.refreshLayout()
@@ -257,6 +258,7 @@ class IdleUi(
     fun clearTransientPressState() {
         menuButton.clearTransientPressState()
         hideKeyboardButton.clearTransientPressState()
+        voiceInputFinishButton.clearTransientPressState()
         buttonsUi.clearTransientPressState()
     }
 
@@ -358,7 +360,7 @@ class IdleUi(
 
     private fun updateMenuButtonIcon() {
         when {
-            currentState == State.Search || currentState == State.Clipboard ->
+            currentState == State.Clipboard ->
                 menuButton.setIcon(R.drawable.ic_baseline_arrow_back_24)
             // 符号面板占据键盘时：工具栏整体保持主键盘的样子，只把最左按钮换成返回箭头
             backToKeyboardMode ->
@@ -377,7 +379,7 @@ class IdleUi(
         }
         if (!toolbarToggleConfig.label.isNullOrEmpty()) return
         menuButton.contentDescription = when {
-            currentState == State.Search || currentState == State.Clipboard -> ctx.getString(R.string.return_to_toolbar)
+            currentState == State.Clipboard -> ctx.getString(R.string.return_to_toolbar)
             inPrivate -> ctx.getString(R.string.private_mode)
             else -> ctx.getString(R.string.status_area)
         }
@@ -473,7 +475,6 @@ class IdleUi(
             State.Clipboard -> animator.displayedChild = 1
             State.NumberRow -> {}
             State.InlineSuggestion -> animator.displayedChild = 2
-            State.Search -> animator.displayedChild = 3
         }
     }
 
@@ -482,7 +483,7 @@ class IdleUi(
      *
      * The strip shows exactly one of the voice status, the number row, or the page selected by
      * [currentState]. Deriving all three views' visibility in one place keeps every path — voice
-     * status, password number row, clipboard/search pages, extended windows — from leaving the
+     * status, password number row, clipboard page, extended windows — from leaving the
      * strip on a page that draws nothing while the fixed edge buttons stay visible.
      */
     private fun applyCenterVisibility() {

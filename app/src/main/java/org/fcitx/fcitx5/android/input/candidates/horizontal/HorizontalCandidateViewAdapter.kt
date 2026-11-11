@@ -31,6 +31,7 @@ open class HorizontalCandidateViewAdapter(
 ) : RecyclerView.Adapter<CandidateViewHolder>() {
 
     private object BadgePositionChanged
+    private object HighlightChanged
 
     private var horizontalOverflowEnabled = initialHorizontalOverflowEnabled
     private var candidateIndexBadgeEnabled = initialCandidateIndexBadgeEnabled
@@ -114,6 +115,8 @@ open class HorizontalCandidateViewAdapter(
     ) {
         val fontChanged = refreshCandidateFontIfNeeded()
         val old = candidates
+        // Keep fresh selection metadata even when all visible text is unchanged.
+        this.candidates = data
         if (
             !fontChanged &&
             this.total == total &&
@@ -126,7 +129,6 @@ open class HorizontalCandidateViewAdapter(
             return
         }
         val oldActive = this.activeIndex
-        this.candidates = data
         this.total = total
         this.activeIndex = activeIndex
         this.indexOffset = indexOffset
@@ -162,10 +164,10 @@ open class HorizontalCandidateViewAdapter(
         // naive notifyItemChanged(oldActive) targets the wrong item once items
         // before it were inserted/removed (double-highlight repro, 2026-09-14).
         if (plan.unhighlightPosition != CandidateUpdatePlan.NONE) {
-            notifyItemChanged(plan.unhighlightPosition)
+            notifyItemChanged(plan.unhighlightPosition, HighlightChanged)
         }
         if (plan.highlightPosition != CandidateUpdatePlan.NONE) {
-            notifyItemChanged(plan.highlightPosition)
+            notifyItemChanged(plan.highlightPosition, HighlightChanged)
         }
     }
 
@@ -175,16 +177,26 @@ open class HorizontalCandidateViewAdapter(
         val previous = activeIndex
         activeIndex = index
         if (previous in candidates.indices) {
-            notifyItemChanged(previous)
+            notifyItemChanged(previous, HighlightChanged)
         }
         if (activeIndex in candidates.indices) {
-            notifyItemChanged(activeIndex)
+            notifyItemChanged(activeIndex, HighlightChanged)
         }
     }
 
     override fun getItemCount() = candidates.size
 
     override fun getItemId(position: Int) = candidates.getOrNull(position).hashCode().toLong()
+
+    /** Refresh the existing window's targets without notifying or re-laying out its text. */
+    internal fun updateSelectionTargets(fullCandidates: Array<CandidateWord>): Boolean {
+        if (indexOffset < 0 || indexOffset > fullCandidates.size - candidates.size) return false
+        val currentWindow = if (indexOffset == 0 && candidates.size == fullCandidates.size) fullCandidates
+            else fullCandidates.copyOfRange(indexOffset, indexOffset + candidates.size)
+        if (!candidates.contentEquals(currentWindow)) return false
+        candidates = currentWindow
+        return true
+    }
 
     /**
      * 按当前的 [candidateIndexBadgeContent] 算出该位置候选的角标文本（引擎标签为空时
@@ -250,12 +262,14 @@ open class HorizontalCandidateViewAdapter(
     }
 
     override fun onBindViewHolder(holder: CandidateViewHolder, position: Int, payloads: MutableList<Any>) {
-        if (payloads.isNotEmpty() && payloads.all { it === BadgePositionChanged }) {
-            holder.ui.setIndexBadge(
-                if (candidateIndexBadgeEnabled) resolveCandidateIndexBadgeText(position, candidates[position]) else null,
-                candidateIndexBadgePosition,
-            )
-            holder.updateIndex(position + indexOffset)
+        if (payloads.isNotEmpty() && payloads.all { it === BadgePositionChanged || it === HighlightChanged }) {
+            if (payloads.any { it === BadgePositionChanged }) {
+                holder.ui.setIndexBadge(
+                    if (candidateIndexBadgeEnabled) resolveCandidateIndexBadgeText(position, candidates[position]) else null,
+                    candidateIndexBadgePosition,
+                )
+                holder.updateIndex(position + indexOffset)
+            }
             holder.ui.setActive(position == activeIndex)
         } else {
             super.onBindViewHolder(holder, position, payloads)

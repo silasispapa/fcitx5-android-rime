@@ -11,6 +11,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import android.graphics.Typeface
 import android.graphics.drawable.ShapeDrawable
 import android.graphics.drawable.shapes.OvalShape
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -33,6 +34,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
+import androidx.activity.result.ActivityResult
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
@@ -42,18 +44,20 @@ import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.data.theme.Theme
 import org.fcitx.fcitx5.android.data.theme.ThemeManager
 import org.fcitx.fcitx5.android.input.AutoScaleTextView
+import org.fcitx.fcitx5.android.input.action.ButtonAction
 import org.fcitx.fcitx5.android.input.config.ButtonsLayoutConfig
 import org.fcitx.fcitx5.android.input.config.ButtonIconFile
 import org.fcitx.fcitx5.android.input.config.ConfigProviders
 import org.fcitx.fcitx5.android.input.config.ConfigProvider
 import org.fcitx.fcitx5.android.input.config.ConfigurableButton
-import org.fcitx.fcitx5.android.input.config.kawaiiBarButtonsWithThemeToggle
+import org.fcitx.fcitx5.android.input.config.displayedKawaiiBarButtons
 import org.fcitx.fcitx5.android.input.keyboard.KeyRef
 import org.fcitx.fcitx5.android.input.keyboard.MacroStep
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.data.LayoutDataManager
-import org.fcitx.fcitx5.android.ui.main.settings.behavior.dialog.MacroEditorActivity
+import org.fcitx.fcitx5.android.ui.main.settings.behavior.dialog.MacroEditorDialogFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.utils.LayoutJsonUtils
 import org.fcitx.fcitx5.android.utils.serializable
+import org.fcitx.fcitx5.android.utils.parcelable
 import splitties.dimensions.dp
 import splitties.resources.drawable
 import org.fcitx.fcitx5.android.utils.settingsColor
@@ -152,23 +156,11 @@ class ButtonsCustomizerActivity : SettingsUiActivity() {
     private var adapter: CombinedAdapter? = null
     private var touchHelper: ItemTouchHelper? = null
 
-    // Available button definitions (all buttons can be used in either section)
-    // Note: input_method_options is fixed at the end of Status Area and not configurable
-    private val availableButtons = listOf(
-        ButtonDefinition("undo", R.drawable.ic_baseline_undo_24, R.string.undo),
-        ButtonDefinition("redo", R.drawable.ic_baseline_redo_24, R.string.redo),
-        ButtonDefinition("cursor_move", R.drawable.ic_cursor_move, R.string.text_editing),
-        ButtonDefinition("floating_toggle", R.drawable.ic_floating_toggle_24, R.string.floating_keyboard),
-        ButtonDefinition("clipboard", R.drawable.ic_clipboard, R.string.clipboard),
-        ButtonDefinition("theme_toggle", R.drawable.ic_theme_light_dark_24, R.string.toggle_day_night_theme),
-        ButtonDefinition("random_theme", R.drawable.ic_random_theme_24, R.string.random_theme),
-        ButtonDefinition("language_switch", R.drawable.ic_baseline_language_24, R.string.language_switch),
-        ButtonDefinition("theme", R.drawable.ic_baseline_palette_24, R.string.theme),
-        ButtonDefinition("icon_theme", R.drawable.ic_icon_theme_24, R.string.icon_theme),
-        ButtonDefinition("reload_config", R.drawable.ic_baseline_sync_24, R.string.reload_config),
-        ButtonDefinition("virtual_keyboard", R.drawable.ic_baseline_keyboard_24, R.string.virtual_keyboard),
-        ButtonDefinition("one_handed_keyboard", R.drawable.ic_baseline_keyboard_tab_24, R.string.one_handed_keyboard)
-    )
+    // Share the runtime catalog so new actions appear in both settings add controls.
+    // input_method_options remains fixed at the end of Status Area.
+    private val availableButtons = ButtonAction.allConfigurableActions
+        .filterNot { it.id == "input_method_options" }
+        .map { ButtonDefinition(it.id, it.defaultIcon, it.defaultLabelRes) }
 
     /**
      * Set of built-in button IDs that cannot be deleted or have custom labels.
@@ -200,6 +192,14 @@ class ButtonsCustomizerActivity : SettingsUiActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        supportFragmentManager.setFragmentResultListener(
+            MacroEditorDialogFragment.RESULT_REQUEST_KEY, this
+        ) { _, result ->
+            handleMacroEditorResult(ActivityResult(
+                result.getInt(MacroEditorDialogFragment.RESULT_CODE),
+                result.parcelable<Intent>(MacroEditorDialogFragment.RESULT_DATA)
+            ))
+        }
         setContentView(ui)
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
@@ -229,7 +229,7 @@ class ButtonsCustomizerActivity : SettingsUiActivity() {
         val draft = runCatching { configJson.decodeFromString<ButtonsLayoutConfig>(json) }
             .onFailure { android.util.Log.w(TAG, "Failed to restore draft buttons config", it) }
             .getOrNull() ?: return
-        applyConfigToItems(draft, useThemeToggleMigration = false)
+        applyConfigToItems(draft)
         // originalItems stays as loaded from disk, so "has unsaved changes" remains correct.
     }
 
@@ -634,31 +634,6 @@ class ButtonsCustomizerActivity : SettingsUiActivity() {
     /** Button id whose icon is being picked; survives recreation via onSaveInstanceState. */
     private var pendingIconButtonId: String? = null
 
-    private val macroEditorLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val json = result.data?.getStringExtra(MacroEditorActivity.EXTRA_MACRO_RESULT_JSON)
-            val steps = if (json != null) {
-                try { macroJson.decodeFromString<List<MacroStep>>(json) } catch (_: Exception) { null }
-            } else null
-            val resolvedSteps = steps ?: MacroEditorActivity.fromStepsExtra(
-                result.data?.serializable<ArrayList<Map<*, *>>>(MacroEditorActivity.EXTRA_MACRO_RESULT)
-            )
-            val targetId = result.data?.getStringExtra(MacroEditorActivity.EXTRA_TARGET_TOKEN)
-                ?: pendingMacroButtonId
-            val callback = pendingMacroCallback
-            if (callback != null) {
-                // Dialog is still up: let it update its own draft state.
-                callback.invoke(resolvedSteps)
-            } else if (targetId != null) {
-                // Host was recreated while the editor was open; apply directly.
-                applyMacroResultToButton(targetId, resolvedSteps)
-            }
-            pendingMacroButtonId = null
-        }
-    }
-
     // File picker for custom icon
     private var pendingIconCallback: ((String?) -> Unit)? = null
     private val iconPickerLauncher = registerForActivityResult(
@@ -731,19 +706,39 @@ class ButtonsCustomizerActivity : SettingsUiActivity() {
         // (see D7) and the editor is launched once the list is ready.
         lifecycleScope.launch {
             val layoutTargets = availableLayoutTargets()
-            val intent = android.content.Intent(this@ButtonsCustomizerActivity, MacroEditorActivity::class.java).apply {
+            val intent = Intent().apply {
                 val stepsList = steps ?: emptyList()
-                putExtra(MacroEditorActivity.EXTRA_MACRO_STEPS_JSON, macroJson.encodeToString(stepsList))
+                putExtra(MacroEditorDialogFragment.EXTRA_MACRO_STEPS_JSON, macroJson.encodeToString(stepsList))
                 // Also include Map format for backward compatibility
-                putExtra(MacroEditorActivity.EXTRA_MACRO_STEPS, MacroEditorActivity.toStepsExtra(stepsList))
-                putExtra(MacroEditorActivity.EXTRA_EVENT_TYPE, getString(R.string.edit_button_macro_event_type))
-                putStringArrayListExtra(MacroEditorActivity.EXTRA_LAYOUT_TARGETS, ArrayList(layoutTargets))
+                putExtra(MacroEditorDialogFragment.EXTRA_MACRO_STEPS, MacroEditorDialogFragment.toStepsExtra(stepsList))
+                putExtra(MacroEditorDialogFragment.EXTRA_EVENT_TYPE, getString(R.string.edit_button_macro_event_type))
+                putStringArrayListExtra(MacroEditorDialogFragment.EXTRA_LAYOUT_TARGETS, ArrayList(layoutTargets))
                 // Carried through the result so the edit can be applied even if this Activity is
-                // recreated while the editor is in front (see macroEditorLauncher).
-                targetButtonId?.let { putExtra(MacroEditorActivity.EXTRA_TARGET_TOKEN, it) }
+                // recreated while the editor is open.
+                targetButtonId?.let { putExtra(MacroEditorDialogFragment.EXTRA_TARGET_TOKEN, it) }
             }
-            macroEditorLauncher.launch(intent)
+            MacroEditorDialogFragment.newInstance(intent)
+                .show(supportFragmentManager, MacroEditorDialogFragment.TAG)
         }
+    }
+
+    private fun handleMacroEditorResult(result: ActivityResult) {
+        val targetId = result.data?.getStringExtra(MacroEditorDialogFragment.EXTRA_TARGET_TOKEN)
+            ?: pendingMacroButtonId
+        if (result.resultCode == RESULT_OK) {
+            val json = result.data?.getStringExtra(MacroEditorDialogFragment.EXTRA_MACRO_RESULT_JSON)
+            val steps = if (json != null) {
+                try { macroJson.decodeFromString<List<MacroStep>>(json) } catch (_: Exception) { null }
+            } else null
+            val resolvedSteps = steps ?: MacroEditorDialogFragment.fromStepsExtra(
+                result.data?.serializable<ArrayList<Map<*, *>>>(MacroEditorDialogFragment.EXTRA_MACRO_RESULT)
+            )
+            val callback = pendingMacroCallback
+            if (callback != null) callback.invoke(resolvedSteps)
+            else if (targetId != null) applyMacroResultToButton(targetId, resolvedSteps)
+        }
+        pendingMacroCallback = null
+        pendingMacroButtonId = null
     }
 
     /**
@@ -995,28 +990,15 @@ class ButtonsCustomizerActivity : SettingsUiActivity() {
         )
     }
 
-    /**
-     * Rebuild [items] from [config]; shared by initial load and draft restore.
-     *
-     * [useThemeToggleMigration] applies the legacy default back-fill; it is wanted when
-     * loading from disk but not when restoring an in-progress edit, which is already the
-     * effective list.
-     */
-    private fun applyConfigToItems(
-        config: ButtonsLayoutConfig,
-        useThemeToggleMigration: Boolean = true
-    ) {
+    /** Rebuild [items] from the saved config or the in-progress draft without adding buttons. */
+    private fun applyConfigToItems(config: ButtonsLayoutConfig) {
         toolbarToggleConfig = config.toolbarToggleButton.normalizedIcon()
         hideKeyboardConfig = config.hideKeyboardButton.normalizedIcon()
         items.clear()
         items.add(ListItem.SectionHeader(Section.SystemBar))
         items.add(ListItem.ButtonItem(toolbarToggleConfig, Section.SystemBar))
         items.add(ListItem.ButtonItem(hideKeyboardConfig, Section.SystemBar))
-        val kawaiiBarButtons = if (useThemeToggleMigration) {
-            config.kawaiiBarButtonsWithThemeToggle()
-        } else {
-            config.kawaiiBarButtons
-        }
+        val kawaiiBarButtons = config.displayedKawaiiBarButtons()
         items.add(ListItem.SectionHeader(Section.KawaiiBar))
         kawaiiBarButtons.forEach { items.add(ListItem.ButtonItem(it, Section.KawaiiBar)) }
         items.add(ListItem.AddButtonPlaceholder)

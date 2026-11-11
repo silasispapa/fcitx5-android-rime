@@ -127,6 +127,9 @@ abstract class KeyView(
     var layoutMarginRight = 0f
 
     var onWaterRippleRequest: ((keyView: KeyView, localX: Float, localY: Float) -> Unit)? = null
+    internal var statisticsKeyLabel: String? = null
+    internal var onStatisticsPress: ((KeyView) -> Unit)? = null
+    private var statisticsTouchActive = false
 
     /**
      * [KeyView] contains 2 parts: `TouchEventView` and `AppearanceView`.
@@ -359,8 +362,16 @@ abstract class KeyView(
         // default implementation does nothing
     }
 
-    protected open fun onAppearanceLayoutChanged(width: Int, height: Int) {
-        // default implementation does nothing
+    /** Return true when the measured key size changes its child constraints. */
+    protected open fun onAppearanceMeasured(width: Int, height: Int): Boolean = false
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        if (onAppearanceMeasured(appearanceView.measuredWidth, appearanceView.measuredHeight)) {
+            // Solve the new label constraints before laying out children. Updating them after
+            // super.onLayout can leave old bounds on screen until an unrelated layer switch.
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -381,14 +392,25 @@ abstract class KeyView(
             )
         }
         super.onLayout(changed, left, top, right, bottom)
-        onAppearanceLayoutChanged(appearanceView.width, appearanceView.height)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> if (isEnabled && !statisticsTouchActive) {
+                statisticsTouchActive = true
+                onStatisticsPress?.invoke(this)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> statisticsTouchActive = false
+        }
         if (event.actionMasked == MotionEvent.ACTION_DOWN && rippled) {
             onWaterRippleRequest?.invoke(this, event.x, event.y)
         }
         return super.onTouchEvent(event)
+    }
+
+    override fun onDetachedFromWindow() {
+        statisticsTouchActive = false
+        super.onDetachedFromWindow()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -902,7 +924,8 @@ class AltTextKeyView(
     private fun applyDirectionalTopBottomAltTextPosition() {
         val hasUpLabel = !altText.text.isNullOrBlank()
         val hasDownLabel = !altText1.text.isNullOrBlank()
-        val moveMainText = ThemeManager.prefs.moveMainTextForAltLabel.getValue()
+        // Two directional labels keep the main content centered regardless of the movement
+        // preference. Anchoring each label to its own edge avoids an overflowing three-row chain.
         altText.visibility = if (hasUpLabel) View.VISIBLE else View.GONE
         altText1.visibility = if (hasDownLabel) View.VISIBLE else View.GONE
         altText.gravity = Gravity.CENTER
@@ -913,40 +936,37 @@ class AltTextKeyView(
         altText.updateLayoutParams<ConstraintLayout.LayoutParams> {
             width = 0
             topToTop = parentId
-            bottomToTop = if (moveMainText && hasUpLabel) mainText.existingOrNewId else unset
-            bottomToBottom = if (moveMainText && !hasUpLabel) parentId else unset
+            topToBottom = unset
+            bottomToTop = unset
+            bottomToBottom = unset
             leftToLeft = parentId
             rightToRight = parentId
+            leftMargin = 0
+            rightMargin = 0
             topMargin = vMargin
             bottomMargin = 0
         }
         altText1.updateLayoutParams<ConstraintLayout.LayoutParams> {
             width = 0
-            topToTop = if (moveMainText && !hasDownLabel) parentId else unset
-            topToBottom = if (moveMainText && hasDownLabel) mainText.existingOrNewId else unset
+            topToTop = unset
+            topToBottom = unset
+            bottomToTop = unset
             bottomToBottom = parentId
             leftToLeft = parentId
             rightToRight = parentId
+            leftMargin = 0
+            rightMargin = 0
             topMargin = 0
             bottomMargin = vMargin + dp(2)
         }
         mainText.updateLayoutParams<ConstraintLayout.LayoutParams> {
-            if (moveMainText) {
-                topToTop = if (hasUpLabel) unset else parentId
-                topToBottom = if (hasUpLabel) altText.existingOrNewId else unset
-                bottomToBottom = if (hasDownLabel) unset else parentId
-                bottomToTop = if (hasDownLabel) altText1.existingOrNewId else unset
-                topMargin = 0
-                bottomMargin = 0
-            } else {
-                centerInParent()
-                topToTop = parentId
-                topToBottom = unset
-                bottomToBottom = parentId
-                bottomToTop = unset
-                topMargin = 0
-                bottomMargin = 0
-            }
+            centerInParent()
+            topToTop = parentId
+            topToBottom = unset
+            bottomToBottom = parentId
+            bottomToTop = unset
+            topMargin = 0
+            bottomMargin = 0
         }
     }
 
@@ -1017,10 +1037,7 @@ class AltTextKeyView(
             val cornerMinHeight = max(mainHeight, labelHeight + cornerLabelTopSafeInset)
 
             if (hasUpLabel && hasDownLabel) {
-                // Use the legacy single-label capacity as the fallback boundary. A normal
-                // row can keep both labels unless it cannot even fit the main content plus
-                // one label; only then collapse them into the two corners (which keeps
-                // both directions visible, unlike the old upper-right-only fallback).
+                // Both labels are anchored independently; movement never changes their layout.
                 val stackedMinHeight = mainHeight + labelHeight + dp(1)
                 return when {
                     contentHeight >= stackedMinHeight -> AltTextLayoutMode.DirectionalTopBottom
@@ -1080,9 +1097,9 @@ class AltTextKeyView(
         }
     }
 
-    private fun applyLayout(keyHeight: Int = appearanceView.height) {
+    private fun applyLayout(keyHeight: Int = appearanceView.height): Boolean {
         val mode = resolveLayoutMode(keyHeight)
-        if (mode == lastLayoutMode) return
+        if (mode == lastLayoutMode) return false
         lastLayoutMode = mode
         val keepDirectionalLabel = when (mode) {
             AltTextLayoutMode.DirectionalUpTopRight,
@@ -1106,6 +1123,7 @@ class AltTextKeyView(
             AltTextLayoutMode.DirectionalCorners -> applyDirectionalCornersAltTextPosition()
             AltTextLayoutMode.Hidden -> applyNoAltTextPosition()
         }
+        return true
     }
 
     fun refreshAltTextLayout() {
@@ -1138,9 +1156,7 @@ class AltTextKeyView(
         applyLayout()
     }
 
-    override fun onAppearanceLayoutChanged(width: Int, height: Int) {
-        applyLayout(height)
-    }
+    override fun onAppearanceMeasured(width: Int, height: Int): Boolean = applyLayout(height)
 
     override fun updateTheme(newTheme: Theme) {
         super.updateTheme(newTheme)
@@ -1495,7 +1511,7 @@ class ImageAltTextKeyView(
     private fun applyDirectionalTopBottomAltTextPosition() {
         val hasUpLabel = !altText.text.isNullOrBlank()
         val hasDownLabel = !altText1.text.isNullOrBlank()
-        val moveMainText = ThemeManager.prefs.moveMainTextForAltLabel.getValue()
+        // Keep the same centered two-label layout as text keys, with either movement setting.
         altText.visibility = if (hasUpLabel) View.VISIBLE else View.GONE
         altText1.visibility = if (hasDownLabel) View.VISIBLE else View.GONE
         altText.gravity = Gravity.CENTER
@@ -1506,40 +1522,37 @@ class ImageAltTextKeyView(
         altText.updateLayoutParams<ConstraintLayout.LayoutParams> {
             width = 0
             topToTop = parentId
-            bottomToTop = if (moveMainText && hasUpLabel) img.existingOrNewId else unset
-            bottomToBottom = if (moveMainText && !hasUpLabel) parentId else unset
+            topToBottom = unset
+            bottomToTop = unset
+            bottomToBottom = unset
             leftToLeft = parentId
             rightToRight = parentId
+            leftMargin = 0
+            rightMargin = 0
             topMargin = vMargin
             bottomMargin = 0
         }
         altText1.updateLayoutParams<ConstraintLayout.LayoutParams> {
             width = 0
-            topToTop = if (moveMainText && !hasDownLabel) parentId else unset
-            topToBottom = if (moveMainText && hasDownLabel) img.existingOrNewId else unset
+            topToTop = unset
+            topToBottom = unset
+            bottomToTop = unset
             bottomToBottom = parentId
             leftToLeft = parentId
             rightToRight = parentId
+            leftMargin = 0
+            rightMargin = 0
             topMargin = 0
             bottomMargin = vMargin + dp(2)
         }
         img.updateLayoutParams<ConstraintLayout.LayoutParams> {
-            if (moveMainText) {
-                topToTop = if (hasUpLabel) unset else parentId
-                topToBottom = if (hasUpLabel) altText.existingOrNewId else unset
-                bottomToBottom = if (hasDownLabel) unset else parentId
-                bottomToTop = if (hasDownLabel) altText1.existingOrNewId else unset
-                topMargin = 0
-                bottomMargin = 0
-            } else {
-                centerInParent()
-                topToTop = parentId
-                topToBottom = unset
-                bottomToBottom = parentId
-                bottomToTop = unset
-                topMargin = 0
-                bottomMargin = 0
-            }
+            centerInParent()
+            topToTop = parentId
+            topToBottom = unset
+            bottomToBottom = parentId
+            bottomToTop = unset
+            topMargin = 0
+            bottomMargin = 0
         }
     }
 
@@ -1631,10 +1644,7 @@ class ImageAltTextKeyView(
             val cornerMinHeight = max(mainHeight, labelHeight + cornerLabelTopSafeInset)
 
             if (hasUpLabel && hasDownLabel) {
-                // Use the legacy single-label capacity as the fallback boundary. A normal
-                // row can keep both labels unless it cannot even fit the main content plus
-                // one label; only then collapse them into the two corners (which keeps
-                // both directions visible, unlike the old upper-right-only fallback).
+                // Both labels are anchored independently; movement never changes their layout.
                 val stackedMinHeight = mainHeight + labelHeight + dp(1)
                 return when {
                     contentHeight >= stackedMinHeight -> AltTextLayoutMode.DirectionalTopBottom
@@ -1716,9 +1726,9 @@ class ImageAltTextKeyView(
         }
     }
 
-    private fun applyLayout(keyHeight: Int = appearanceView.height) {
+    private fun applyLayout(keyHeight: Int = appearanceView.height): Boolean {
         val mode = resolveLayoutMode(keyHeight)
-        if (mode == lastLayoutMode) return
+        if (mode == lastLayoutMode) return false
         lastLayoutMode = mode
         val keepDirectionalLabel = when (mode) {
             AltTextLayoutMode.DirectionalUpTopRight,
@@ -1742,6 +1752,7 @@ class ImageAltTextKeyView(
             AltTextLayoutMode.DirectionalCorners -> applyDirectionalCornersAltTextPosition()
             AltTextLayoutMode.Hidden -> applyNoAltTextPosition()
         }
+        return true
     }
 
     fun refreshAltTextLayout() {
@@ -1775,9 +1786,7 @@ class ImageAltTextKeyView(
         applyLayout()
     }
 
-    override fun onAppearanceLayoutChanged(width: Int, height: Int) {
-        applyLayout(height)
-    }
+    override fun onAppearanceMeasured(width: Int, height: Int): Boolean = applyLayout(height)
 
     override fun updateTheme(newTheme: Theme) {
         super.updateTheme(newTheme)

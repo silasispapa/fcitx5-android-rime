@@ -7,9 +7,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
-import org.fcitx.directrime.Native
 import org.fcitx.directrime.Snapshot
 import org.fcitx.fcitx5.android.FcitxApplication
+import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.editor.EditorApplicationShadow
 import org.junit.After
 import org.junit.Assert.*
@@ -19,19 +19,17 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import org.robolectric.annotation.Implementation
-import org.robolectric.annotation.Implements
 import org.robolectric.util.ReflectionHelpers
 
 /** Real owner queue, binding, ticket and delivery code; only the JNI boundary is simulated. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = FcitxApplication::class,
-    shadows = [EditorApplicationShadow::class, BindingNativeShadow::class])
+    shadows = [EditorApplicationShadow::class, NativeTestShadow::class])
 class InputBindingStartupTest {
     private lateinit var backend: DirectRimeBackend
     private lateinit var owner: ExecutorCoroutineDispatcher
 
-    @Before fun resetNative() { BindingNativeShadow.reset() }
+    @Before fun resetNative() { BindingNativeShadow.reset(); NativeTestShadow.delegate = BindingNativeShadow() }
 
     private fun createBackend(directBoot: Boolean = false) {
         ReflectionHelpers.setField(FcitxApplication.getInstance(), "isDirectBootMode", directBoot)
@@ -42,8 +40,13 @@ class InputBindingStartupTest {
         ReflectionHelpers.getField<InputKeyGate>(backend, "keyGate").running()
     }
 
-    private fun prepare(flags: CapabilityFlags = CapabilityFlags.DefaultFlags): Long =
-        backend.invalidateInputSession().also { backend.prepareInputSession(it, "editor", flags, true) }
+    private fun prepare(flags: CapabilityFlags = CapabilityFlags.DefaultFlags, program: String = "editor"): Long =
+        backend.invalidateInputSession().also { backend.prepareInputSession(it, program, flags, true) }
+
+    private suspend fun bind(program: String, flags: CapabilityFlags = CapabilityFlags.DefaultFlags) =
+        backend.startInputSession(prepare(flags, program), program)
+
+    private fun currentSnapshot(): Snapshot = ReflectionHelpers.getField(backend, "snapshot")
 
     @After fun closeBackend() {
         if (!::backend.isInitialized) return
@@ -54,15 +57,15 @@ class InputBindingStartupTest {
         owner.close()
     }
 
-    @Test fun schemaAndAsciiRestorationAndStatusReadKeepInteractivePriority() = runBlocking {
+    @Test fun nativeBindingAndStatusReadKeepInteractivePriority() = runBlocking {
         createBackend()
-        ReflectionHelpers.setField(backend, "preferredSchema", "preferred")
-        ReflectionHelpers.setField(backend, "preferredAscii", true)
+        BindingNativeShadow.initialSchema = "preferred"
+        BindingNativeShadow.initialAscii = true
         withContext(owner) { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
 
         backend.startInputSession(prepare(), "editor")
 
-        assertEquals(listOf("begin", "schema", "ascii", "options"), BindingNativeShadow.calls.map { it.phase })
+        assertEquals(listOf("begin", "options"), BindingNativeShadow.calls.map { it.phase })
         assertTrue(BindingNativeShadow.calls.all { it.priority <= Process.THREAD_PRIORITY_DISPLAY })
         assertEquals(1, BindingNativeShadow.calls.map { it.thread }.distinct().size)
         assertEquals(Process.THREAD_PRIORITY_BACKGROUND,
@@ -74,10 +77,9 @@ class InputBindingStartupTest {
         assertTrue(result.ascii)
     }
 
-    @Test fun restorationFailureStillRestoresTheOwnerThreadPriority() = runBlocking {
+    @Test fun statusReadFailureStillRestoresTheOwnerThreadPriority() = runBlocking {
         createBackend()
-        ReflectionHelpers.setField(backend, "preferredSchema", "preferred")
-        BindingNativeShadow.failAction = true
+        BindingNativeShadow.failOptions = true
         withContext(owner) { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
         val generation = prepare()
 
@@ -87,6 +89,109 @@ class InputBindingStartupTest {
         assertFalse(backend.acceptsInput)
         assertEquals(Process.THREAD_PRIORITY_BACKGROUND,
             withContext(owner) { Process.getThreadPriority(Process.myTid()) })
+    }
+
+    @Test fun newApplicationUsesRimeAsciiReset() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        backend.toggleIme()
+        assertTrue(currentSnapshot().ascii)
+        BindingNativeShadow.calls.clear()
+
+        bind("editor.two")
+
+        assertFalse("Rime's new-session ascii_mode reset must remain authoritative", currentSnapshot().ascii)
+        assertEquals(listOf("begin", "options"), BindingNativeShadow.calls.map { it.phase })
+    }
+
+    @Test fun newApplicationDoesNotInheritTemporaryInlineAscii() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        backend.sendKey('N', 1u, 0, false, 1)
+        assertTrue(currentSnapshot().ascii)
+        assertEquals("N", currentSnapshot().preedit)
+
+        bind("editor.two")
+
+        assertFalse("An old inline composition is not a preference for the next app", currentSnapshot().ascii)
+        assertTrue(currentSnapshot().preedit.isEmpty())
+    }
+
+    @Test fun newApplicationUsesRimeSelectedSchema() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        assertTrue(backend.activateSchemaActionIfCurrent(101, backend.inputSession))
+        assertEquals("preferred", currentSnapshot().schema)
+        BindingNativeShadow.calls.clear()
+
+        bind("editor.two")
+
+        assertEquals("Rime's first-schema choice must not be replaced by an old snapshot", "initial", currentSnapshot().schema)
+        assertEquals(listOf("begin", "options"), BindingNativeShadow.calls.map { it.phase })
+    }
+
+    @Test fun newApplicationKeepsRimeRestoredAscii() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        assertFalse(currentSnapshot().ascii)
+        BindingNativeShadow.initialAscii = true
+
+        bind("editor.two")
+
+        assertTrue("A mode restored by Rime must not be replaced by the previous editor's mode", currentSnapshot().ascii)
+    }
+
+    @Test fun sameApplicationKeepsNativeReusedMode() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        backend.toggleIme()
+
+        bind("editor.one")
+
+        assertTrue(currentSnapshot().ascii)
+        assertEquals(1L, BindingNativeShadow.created)
+        assertEquals(1L, BindingNativeShadow.reused)
+    }
+
+    @Test @Config(qualifiers = "zh") fun modeMenuNamesMatchTheResultingHints() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        val context = RuntimeEnvironment.getApplication()
+        val english = context.getString(R.string.direct_rime_ascii_mode)
+        val chinese = context.getString(R.string.direct_rime_chinese_mode)
+        assertEquals("英文模式", english)
+        assertEquals("中文模式", chinese)
+        fun root() = backend.statusAreaActionsCached.first { it.name == "rime" }
+        fun mode() = root().menu!!.first { it.name == "ascii_mode" }
+
+        assertFalse(mode().isChecked)
+        assertEquals(english, mode().shortText)
+        backend.activateAction(mode().id)
+        assertTrue(currentSnapshot().ascii)
+        assertTrue(mode().isChecked)
+        assertEquals(chinese, mode().shortText)
+        assertEquals(english, root().shortText)
+        assertEquals(english, backend.inputPanelCached.auxUp.toString())
+
+        backend.activateAction(mode().id)
+        assertFalse(currentSnapshot().ascii)
+        assertEquals(english, mode().shortText)
+        assertEquals(currentSnapshot().schemaName, root().shortText)
+        assertEquals(chinese, backend.inputPanelCached.auxUp.toString())
+        assertEquals(listOf("ascii-toggle", "ascii-toggle"),
+            BindingNativeShadow.calls.filter { it.phase == "ascii-toggle" }.map { it.phase })
+    }
+
+    @Test fun sensitiveBoundaryUsesNewRimeState() = runBlocking {
+        createBackend()
+        bind("editor.one")
+        backend.toggleIme()
+
+        bind("editor.one", CapabilityFlags(CapabilityFlag.Sensitive))
+
+        assertFalse(currentSnapshot().ascii)
+        assertTrue(BindingNativeShadow.noLearning)
+        assertEquals(2L, BindingNativeShadow.created)
     }
 
     @Test fun passwordWithoutASchemaStillDeliversOrderedDownAndUp() = runBlocking {
@@ -151,58 +256,75 @@ class InputBindingStartupTest {
     }
 }
 
-@Implements(Native::class, isInAndroidSdk = false)
-class BindingNativeShadow {
+internal class BindingNativeShadow : NativeTestDelegate {
     companion object {
         data class Call(val phase: String, val priority: Int, val thread: Long)
         val calls = mutableListOf<Call>()
         var gate = 0
         var noLearning = false
-        var failAction = false
-        private var created = 0L
+        var failOptions = false
+        var initialSchema = "initial"
+        var initialAscii = false
+        var created = 0L
+        var reused = 0L
         private var generation = 0L
         private var revision = 0L
         private var schema = "initial"
         private var ascii = false
+        private var preedit = ""
+        private var currentProgram = ""
 
         fun reset() {
-            calls.clear(); gate = 0; noLearning = false; failAction = false
-            created = 0; generation = 0; revision = 0; schema = "initial"; ascii = false
-        }
-
-        @JvmStatic @Implementation fun __staticInitializer__() {
-            // Retain the Kotlin singleton while excluding System.loadLibrary from this JVM test.
-            ReflectionHelpers.setStaticField(Native::class.java, "INSTANCE",
-                ReflectionHelpers.callConstructor(Native::class.java))
+            calls.clear(); gate = 0; noLearning = false; failOptions = false
+            initialSchema = "initial"; initialAscii = false
+            created = 0; reused = 0; generation = 0; revision = 0; schema = "initial"; ascii = false
+            preedit = ""; currentProgram = ""
         }
 
         private fun record(phase: String) {
             calls += Call(phase, Process.getThreadPriority(Process.myTid()), Process.myTid().toLong())
         }
 
-        private fun snapshot() = Snapshot(generation, ++revision, revision, false, gate,
-            "", "", if (gate == 0) schema else "", ascii, 0, true, 0,
-            emptyArray(), emptyArray(), emptyArray(), schema, -1, "", emptyArray())
+        private fun snapshot(handled: Boolean = false) = Snapshot(generation, ++revision, revision, handled, gate,
+            "", preedit, if (gate == 0) schema else "", ascii, 0, true, 0,
+            emptyArray(), emptyArray(), emptyArray(), schema, if (preedit.isEmpty()) -1 else preedit.length,
+            preedit, emptyArray())
     }
 
-    @Implementation fun sessionStats() = longArrayOf(created, 0, 0)
-    @Implementation fun operationTiming() = LongArray(16)
-    @Implementation fun beginInput(value: Long, program: String, sensitive: Boolean): Snapshot {
-        record("begin"); generation = value; noLearning = sensitive
-        if (gate == 0) created++
+    override fun sessionStats() = longArrayOf(created, reused, 0)
+    override fun operationTiming() = LongArray(16)
+    override fun beginInput(value: Long, program: String, sensitive: Boolean): Snapshot {
+        record("begin"); generation = value
+        if (gate == 0) {
+            // The boundary supplies librime's initialized/restored state. An ordinary
+            // same-app session can retain its mode; sensitive and cross-app binds cannot.
+            if (created > 0 && !sensitive && !noLearning && program.isNotEmpty() && program == currentProgram) {
+                reused++
+            } else {
+                created++; schema = initialSchema; ascii = initialAscii
+            }
+        }
+        noLearning = sensitive; currentProgram = program; preedit = ""
         return snapshot()
     }
-    @Implementation fun action(value: Long, previous: Long, action: Int, index: Int, name: String): Snapshot {
+    override fun action(value: Long, previous: Long, action: Int, index: Int, name: String): Snapshot {
         check(value == generation && previous == revision)
-        check(!failAction) { "Injected restore failure" }
         when (action) {
-            3 -> { record("schema"); schema = name }
+            3 -> { record("schema"); schema = name; ascii = false }
+            6 -> { record("ascii-toggle"); ascii = !ascii }
             8 -> { record("ascii"); ascii = index != 0 }
             else -> error("Unexpected native action $action")
         }
-        return snapshot()
+        return snapshot(true)
     }
-    @Implementation fun options(): Array<String> { record("options"); return emptyArray() }
-    @Implementation fun key(value: Long, sym: Int, mask: Int, release: Boolean): Snapshot =
-        error("Direct input must not send keys to librime")
+    override fun options(): Array<String> {
+        record("options")
+        check(!failOptions) { "Injected status read failure" }
+        return emptyArray()
+    }
+    override fun key(value: Long, sym: Int, mask: Int, release: Boolean): Snapshot {
+        check(value == generation && sym == 'N'.code && !release) { "Unexpected native key" }
+        record("inline-ascii"); ascii = true; preedit = "N"
+        return snapshot(true)
+    }
 }

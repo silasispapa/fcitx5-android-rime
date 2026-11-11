@@ -8,6 +8,8 @@
     <string name="layout_editor_delete_layout">현재 배열 삭제…</string>
     <string name="layout_editor_normal">일반 배열</string>
     <string name="layout_editor_split">분할 배열</string>
+    <string name="text_keyboard_layout_composing_preview">조합 중</string>
+    <string name="text_keyboard_layout_composing_preview_helper">미리보기에서 조합 중에 적용되는 키 구성을 표시합니다. 미리보기만 바뀌며 레이아웃이나 실제 입력 상태는 변경되지 않습니다.</string>
     <string name="layout_editor_inherited">기본 레이아웃을 사용 중입니다. 변경하면 이 레이아웃을 상속하는 다른 입력 스키마에도 적용됩니다.</string>
     <string name="layout_editor_own">현재 입력 스키마의 전용 레이아웃 편집 중</string>
     <string name="layout_editor_base">기본 레이아웃 편집 중</string>
@@ -29,6 +31,8 @@
     <string name="layout_editor_row_settings">행 설정</string>
     <string name="layout_editor_row_height_hint">이 행의 모든 키에 적용됩니다. 비워 두면 남은 높이를 자동으로 배분합니다.</string>
     <string name="layout_editor_split_boundary">분할 위치</string>
+    <string name="layout_editor_split_row_keep_together">이 행을 연결해서 표시</string>
+    <string name="layout_editor_split_row_keep_together_hint">분할 배열에서도 이 행은 가운데 간격 없이 키보드 전체 너비로 표시됩니다.</string>
     <string name="layout_editor_split_auto">자동</string>
     <string name="layout_editor_split_after">%1$d번째 키 「%2$s」 뒤</string>
     <string name="layout_editor_deleted">삭제됨</string>

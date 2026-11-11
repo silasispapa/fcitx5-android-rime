@@ -13,6 +13,7 @@ sealed class FcitxEvent<T>(open val data: T) {
 
     // Opt-in diagnostics only. Kept outside data-class equality and never logged with text.
     internal var diagnosticSequence: Long = 0
+    internal var diagnosticProducedNanos: Long = 0
     internal var diagnosticEmittedNanos: Long = 0
 
     abstract val eventType: EventType
@@ -52,7 +53,24 @@ sealed class FcitxEvent<T>(open val data: T) {
 
         override val eventType = EventType.Commit
 
+        internal var statistics: InputOperationStatistics? = null
+
         data class Data(val text: String, val cursor: Int)
+    }
+
+    /** Counts admitted DOWN operations; never forwarded to Android as another key. */
+    internal data class StatisticsKeyEvent(val statistics: InputOperationStatistics, val sym: Int) :
+        FcitxEvent<Unit>(Unit) {
+        override val eventType = EventType.StatisticsKey
+    }
+
+    /** Optional metrics travel together while intermediate presentation frames may still merge. */
+    internal data class StatisticsKeysEvent(
+        val keys: List<StatisticsKeyEvent>,
+        val epoch: Long,
+        val dropped: Long = 0
+    ) : FcitxEvent<Unit>(Unit) {
+        override val eventType = EventType.StatisticsKeys
     }
 
     data class ClientPreeditEvent(override val data: FormattedText) :
@@ -246,6 +264,8 @@ sealed class FcitxEvent<T>(open val data: T) {
         StatusArea,
         DeleteSurrounding,
         PagedCandidate,
-        SwitchInputMethod
+        SwitchInputMethod,
+        StatisticsKey,
+        StatisticsKeys
     }
 }

@@ -46,6 +46,7 @@
     <string name="clipboard_entry_file_named">파일 · %1$s</string>
     <string name="copy">복사</string>
     <string name="clipboard_search_no_results">결과 없음</string>
+    <string name="clipboard_search_hint">클립보드 검색</string>
     <string name="addon_dir_profile_delete_last_forbidden">데이터 디렉터리를 하나 이상 남겨야 합니다</string>
     <string name="random_theme">무작위 테마</string>
     <string name="random_theme_score">배색 점수: %1$d/100 (대비 %2$d, 색조 %3$d, 채도 %4$d, 명도 %5$d)</string>
@@ -367,7 +368,7 @@
     <string name="js_voice_secret_save_failed">이 기기에서 API 키를 암호화할 수 없습니다. 이전 값은 유지되었습니다.</string>
     <string name="js_voice_undeclared_host">플러그인이 허용되지 않은 호스트에 연결합니다: %1$s</string>
     <string name="js_voice_plugins_current">%1$s · 사용 중</string>
-    <string name="js_voice_plugins_title">JS 음성 플러그인</string>
+    <string name="js_voice_plugins_title">JS 플러그인 설정</string>
     <string name="js_voice_plugins_summary">내장 및 가져온 음성 인식 플러그인 관리</string>
     <string name="js_voice_plugins_entry_summary">v%1$s · %2$s</string>
     <string name="js_voice_plugins_delete_title">플러그인을 제거할까요?</string>
