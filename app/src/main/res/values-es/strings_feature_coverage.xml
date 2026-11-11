@@ -473,6 +473,4 @@
     <string name="settings_ui_interaction">Interacción</string>
     <string name="setup_step_counter">Paso %1$d de %2$d</string>
     <string name="space_swipe_vertical_cursor">Deslizar arriba/abajo en la barra espaciadora para mover el cursor entre líneas</string>
-    <string name="settings_group_about">Acerca de y actualizaciones</string>
-    <string name="settings_group_about_summary">Versiones y actualizaciones, preguntas frecuentes, desarrollador y acerca de</string>
 </resources>

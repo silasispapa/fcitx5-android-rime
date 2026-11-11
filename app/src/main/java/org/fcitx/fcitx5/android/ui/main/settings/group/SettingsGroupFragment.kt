@@ -6,7 +6,6 @@
 package org.fcitx.fcitx5.android.ui.main.settings.group
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import androidx.fragment.app.activityViewModels
@@ -70,7 +69,5 @@ class SettingsGroupFragment : PaddingPreferenceFragment() {
         is SettingsGroupAction.Route -> navigateWithAnim(action.route)
         is SettingsGroupAction.Launch ->
             startActivity(Intent(requireContext(), action.activityClass))
-        is SettingsGroupAction.Url ->
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(action.url)))
     }
 }

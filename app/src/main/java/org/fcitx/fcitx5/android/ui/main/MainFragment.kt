@@ -193,12 +193,10 @@ class MainFragment : PaddingPreferenceFragment() {
                     SettingsRoute.Advanced,
                     R.string.settings_group_advanced_summary
                 )
-                // 原右上角菜单（常见问题 / 开发者 / 关于）收进这里，并放出版本与更新
                 addDestinationPreference(
-                    R.string.settings_group_about,
+                    R.string.about,
                     R.drawable.ic_baseline_info_24,
-                    SettingsRoute.SettingsGroup(SettingsGroupSpecs.ID_ABOUT),
-                    R.string.settings_group_about_summary
+                    SettingsRoute.About
                 )
             }
 

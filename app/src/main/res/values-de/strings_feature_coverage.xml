@@ -473,6 +473,4 @@
     <string name="settings_ui_interaction">Interaktion</string>
     <string name="setup_step_counter">Schritt %1$d von %2$d</string>
     <string name="space_swipe_vertical_cursor">Leertaste nach oben/unten wischen, um den Cursor zwischen Zeilen zu bewegen</string>
-    <string name="settings_group_about">Info &amp; Updates</string>
-    <string name="settings_group_about_summary">Versionen und Updates, FAQ, Entwickler und Info</string>
 </resources>

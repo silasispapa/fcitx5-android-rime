@@ -472,6 +472,4 @@
     <string name="settings_ui_interaction">Взаимодействие</string>
     <string name="setup_step_counter">Шаг %1$d из %2$d</string>
     <string name="space_swipe_vertical_cursor">Свайп вверх/вниз по пробелу перемещает курсор между строками</string>
-    <string name="settings_group_about">О приложении и обновления</string>
-    <string name="settings_group_about_summary">Версии и обновления, частые вопросы, разработчик и о приложении</string>
 </resources>
