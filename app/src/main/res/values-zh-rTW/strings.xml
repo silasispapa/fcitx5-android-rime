@@ -121,6 +121,7 @@
     <string name="clipboard_category_local">本機</string>
     <string name="clipboard_category_media">媒體</string>
     <string name="clipboard_category_remote">其他裝置</string>
+    <string name="clipboard_category_bar_toggle">顯示/隱藏分類</string>
     <string name="clipboard_entry_file">檔案</string>
     <string name="clipboard_entry_file_named">檔案 · %1$s</string>
     <string name="clear">清除</string>

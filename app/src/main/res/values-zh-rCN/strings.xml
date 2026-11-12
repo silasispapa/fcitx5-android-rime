@@ -121,6 +121,7 @@
     <string name="clipboard_category_local">本地</string>
     <string name="clipboard_category_media">媒体</string>
     <string name="clipboard_category_remote">其他设备</string>
+    <string name="clipboard_category_bar_toggle">显示/隐藏分类</string>
     <string name="clipboard_entry_file">文件</string>
     <string name="clipboard_entry_file_named">文件 · %1$s</string>
     <string name="clear">清空</string>

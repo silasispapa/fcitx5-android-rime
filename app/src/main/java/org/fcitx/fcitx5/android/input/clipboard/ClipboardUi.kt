@@ -127,9 +127,30 @@ class ClipboardUi(override val ctx: Context, private val theme: Theme, private v
         contentDescription = ctx.getString(R.string.search)
     }
 
+    private var categoryBarCollapsed by AppPrefs.getInstance().internal.clipboardCategoryBarCollapsed
+
+    val categoryToggleButton = ToolButton(ctx, categoryToggleIcon(), theme).apply {
+        contentDescription = ctx.getString(R.string.clipboard_category_bar_toggle)
+        setOnClickListener {
+            categoryBarCollapsed = !categoryBarCollapsed
+            if (!disableAnimation) TransitionManager.beginDelayedTransition(root)
+            applyCategoryBarCollapsed()
+        }
+    }
+
+    private fun categoryToggleIcon() =
+        if (categoryBarCollapsed) R.drawable.ic_baseline_expand_more_24 else R.drawable.ic_baseline_expand_less_24
+
+    private fun applyCategoryBarCollapsed() {
+        categoryBar.visibility = if (categoryBarCollapsed) View.GONE else View.VISIBLE
+        categoryToggleButton.setIcon(categoryToggleIcon())
+    }
+
     val extension = horizontalLayout {
+        add(categoryToggleButton, lParams(dp(40), dp(40)))
         add(deleteAllButton, lParams(dp(40), dp(40)))
         add(searchButton, lParams(dp(40), dp(40)))
+        if (searchMode) categoryToggleButton.visibility = View.GONE else applyCategoryBarCollapsed()
     }
 
     private fun setDeleteButtonShown(enabled: Boolean) {
