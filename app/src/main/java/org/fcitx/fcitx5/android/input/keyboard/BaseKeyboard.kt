@@ -362,6 +362,8 @@ abstract class BaseKeyboard(
 
     // 退格键"上滑清空"：长按进入连删后弹出提示条，手指滑进提示条区域即清空正文。
     private var backspaceClearPopup: PopupWindow? = null
+    private var backspaceClearPopupWidth = 0
+    private var backspaceClearPopupLeft = 0
     private var backspaceClearTriggered = false
 
     private val selectionSwipeThreshold = dp(10f)
@@ -3231,9 +3233,9 @@ abstract class BaseKeyboard(
     private fun showBackspaceClearPopup(anchorView: View) {
         dismissBackspaceClearPopup()
         backspaceClearTriggered = false
-        val popupWidth = anchorView.width * 2
         val popupHeight = dp(40)
         val textView = TextView(context).apply {
+            maxLines = 1
             // 合成中上滑只清编码区（发 Escape），提示条显示 "Esc"；非合成时清空整个
             // 输入框，沿用原"上滑清空"文案。
             text = if (composing) "Esc" else context.getString(R.string.backspace_swipe_to_clear)
@@ -3246,12 +3248,22 @@ abstract class BaseKeyboard(
             }
             setPadding(dp(8), dp(6), dp(8), dp(6))
         }
+        // 文案较长（如英文）时按单行文字宽度加宽，避免换行后被固定高度裁掉。
+        val textWidth = textView.paint.measureText(textView.text.toString()).toInt() +
+            textView.paddingLeft + textView.paddingRight + dp(4)
+        val popupWidth = maxOf(anchorView.width * 2, textWidth)
+        backspaceClearPopupWidth = popupWidth
         val popup = PopupWindow(textView, popupWidth, popupHeight, false).apply {
             isTouchable = false
             isOutsideTouchable = false
             animationStyle = 0
         }
-        val xOffset = -(anchorView.width / 2)
+        // 以键中心居中，但限制在键盘范围内，避免靠边时被系统推移而与命中区域错位。
+        val anchorLeft = IntArray(2).also { anchorView.getLocationInWindow(it) }[0] -
+            IntArray(2).also { getLocationInWindow(it) }[0]
+        val centered = -(popupWidth - anchorView.width) / 2
+        val xOffset = centered.coerceIn(-anchorLeft, maxOf(-anchorLeft, width - anchorLeft - popupWidth))
+        backspaceClearPopupLeft = xOffset
         val yOffset = -(popupHeight + anchorView.height)
         popup.showAsDropDown(anchorView, xOffset, yOffset)
         backspaceClearPopup = popup
@@ -3265,14 +3277,14 @@ abstract class BaseKeyboard(
     /**
      * 手指是否落在提示条区域内。
      *
-     * 坐标是相对退格键的：提示条横向以键中心对齐、宽度为键宽的两倍，纵向位于键上方
+     * 坐标是相对退格键的：横向范围与弹出时实际使用的偏移和宽度一致，纵向位于键上方
      * 一个提示条高度的范围内。
      */
     private fun checkBackspaceClearPopupHit(anchorView: View, touchX: Float, touchY: Float): Boolean {
         backspaceClearPopup ?: return false
-        val popupWidth = anchorView.width * 2
+        val popupWidth = backspaceClearPopupWidth
         val popupHeight = dp(40)
-        val popupLeft = -(anchorView.width / 2).toFloat()
+        val popupLeft = backspaceClearPopupLeft.toFloat()
         val popupRight = popupLeft + popupWidth
         return touchX in popupLeft..popupRight && touchY in -(popupHeight.toFloat())..0f
     }
