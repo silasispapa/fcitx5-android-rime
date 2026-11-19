@@ -112,7 +112,7 @@ abstract class ClipboardAdapter(
         ViewHolder(ClipboardEntryUi(parent.context, theme, entryRadius, colors))
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val entry = getItem(position) ?: return
+        val entry = getItem(mapped(position)) ?: return
         with(holder.entryUi) {
             val displayText = if (entry.isUriEntry()) {
                 compactUriLabel(ctx, entry)
@@ -261,7 +261,58 @@ abstract class ClipboardAdapter(
         super.onViewRecycled(holder)
     }
 
-    fun getEntryAt(position: Int) = getItem(position)
+    fun getEntryAt(position: Int) = getItem(mapped(position))
+
+    // 拖动中的显示顺序（显示位置 → 分页数据位置）。PagingDataAdapter 不能直接移动条目，
+    // 拖动期间先在本地映射，松手写库后待下一次分页刷新再清除映射。
+    private var dragOrder: MutableList<Int>? = null
+
+    private fun mapped(position: Int) = dragOrder?.getOrNull(position) ?: position
+
+    init {
+        addOnPagesUpdatedListener {
+            if (dragOrder != null) {
+                dragOrder = null
+                @Suppress("NotifyDataSetChanged")
+                notifyDataSetChanged()
+            }
+        }
+    }
+
+    /** 仅允许置顶条目之间移动，否则排序会被 pinned 优先规则覆盖。 */
+    fun moveForDrag(from: Int, to: Int): Boolean {
+        val order = dragOrder ?: MutableList(itemCount) { it }
+        val source = getItem(order.getOrNull(from) ?: return false) ?: return false
+        val target = getItem(order.getOrNull(to) ?: return false) ?: return false
+        if (!source.pinned || !target.pinned) return false
+        dragOrder = order
+        order.add(to, order.removeAt(from))
+        popupMenu?.dismiss()
+        notifyItemMoved(from, to)
+        return true
+    }
+
+    /** 松手：返回需要写入的新时间戳（id → timestamp），沿用被移动区间原有的时间戳。 */
+    fun finishDrag(): Map<Int, Long> {
+        val order = dragOrder ?: return emptyMap()
+        val changed = order.indices.filter { order[it] != it }
+        if (changed.isEmpty()) {
+            dragOrder = null
+            return emptyMap()
+        }
+        val range = changed.first()..changed.last()
+        val result = linkedMapOf<Int, Long>()
+        var previous = Long.MAX_VALUE
+        for (i in range) {
+            val entry = getItem(order[i]) ?: continue
+            val original = getItem(i) ?: continue
+            // 原时间戳可能相同，强制严格递减以确保排序稳定。
+            val timestamp = minOf(original.timestamp, previous - 1)
+            previous = timestamp
+            result[entry.id] = timestamp
+        }
+        return result
+    }
 
     fun onDetached() {
         scope.cancel()

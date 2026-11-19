@@ -429,6 +429,12 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
 
     suspend fun unpin(id: Int) = clbDao.updatePinStatus(id, false)
 
+    /** 拖动排序：列表按 pinned、timestamp 排序，重排即在同组内重新分配时间戳。 */
+    suspend fun reorder(timestamps: Map<Int, Long>) {
+        if (timestamps.isEmpty()) return
+        clbDb.withTransaction { timestamps.forEach { (id, t) -> clbDao.updateTime(id, t) } }
+    }
+
     suspend fun markUsed(id: Int, timestamp: Long = System.currentTimeMillis()) {
         clbDao.updateTimeIfUnpinned(id, timestamp)
     }

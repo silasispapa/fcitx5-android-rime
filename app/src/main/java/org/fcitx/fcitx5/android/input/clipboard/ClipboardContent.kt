@@ -307,15 +307,28 @@ internal class ClipboardContent(
                     recyclerView: RecyclerView,
                     viewHolder: RecyclerView.ViewHolder
                 ): Int {
-                    return makeMovementFlags(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT)
+                    // 只有置顶条目可拖动排序；未置顶条目按最近使用排序，拖动无意义。
+                    val pinned = adapter.getEntryAt(viewHolder.bindingAdapterPosition)?.pinned == true
+                    val drag = if (pinned) ItemTouchHelper.UP or ItemTouchHelper.DOWN or
+                        ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT else 0
+                    return makeMovementFlags(drag, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT)
                 }
 
                 override fun onMove(
                     recyclerView: RecyclerView,
                     viewHolder: RecyclerView.ViewHolder,
                     target: RecyclerView.ViewHolder
-                ): Boolean {
-                    return false
+                ): Boolean = adapter.moveForDrag(
+                    viewHolder.bindingAdapterPosition,
+                    target.bindingAdapterPosition
+                )
+
+                override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                    super.clearView(recyclerView, viewHolder)
+                    val timestamps = adapter.finishDrag()
+                    if (timestamps.isNotEmpty()) {
+                        service.lifecycleScope.launch { ClipboardManager.reorder(timestamps) }
+                    }
                 }
 
                 override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
