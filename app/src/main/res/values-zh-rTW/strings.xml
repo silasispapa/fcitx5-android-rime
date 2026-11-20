@@ -414,6 +414,10 @@
     <string name="button_sound_volume">按鍵音音量</string>
     <string name="clipboard_return_after_paste">貼上後返回</string>
     <string name="theme_message_follow_system_day_night_mode_enabled">已設定「依據系統設定主題色調」，無法手動切換主題。</string>
+    <string name="theme_kit_title">套用成套主題？</string>
+    <string name="theme_kit_message">這套主題還帶有配套的鍵盤配置、圖示主題、按鍵副字型與鍵帽風格，是否與「%1$s」一併套用？</string>
+    <string name="theme_kit_apply_all">一併套用</string>
+    <string name="theme_kit_theme_only">僅套用配色</string>
     <string name="disable_it">停用此項</string>
     <string name="reset_keyboard_on_focus_change">焦點改變時切換回鍵盤</string>
     <string name="export_user_data">匯出使用者資料</string>
@@ -492,6 +496,7 @@
     <string name="private_mode">隱私模式（點擊開啟狀態區）</string>
     <string name="return_to_toolbar">返回工具列</string>
     <string name="back_to_keyboard">返回鍵盤</string>
+    <string name="exit_inline_suggestions">退出自動填充建議</string>
     <string name="backspace">退格</string>
     <string name="move_cursor_up">向上移動游標</string>
     <string name="move_cursor_right">向右移動游標</string>
@@ -959,9 +964,13 @@
     <string name="icon_theme_saved">已儲存</string>
     <string name="icon_theme_name_empty">名稱不能為空</string>
     <string name="icon_theme_name_exists">名稱已存在</string>
+    <string name="show_key_alt_labels">顯示按鍵副標籤</string>
+    <string name="show_key_alt_labels_summary">按鍵上的小字提示：字母鍵的標點、功能鍵的滑動提示。</string>
     <string name="icon_theme_invalid_svg">無效的 SVG 檔案</string>
     <string name="icon_theme_read_svg_failed">讀取 SVG 檔案失敗</string>
     <string name="icon_theme_keyboard_keys">鍵盤按鍵</string>
+    <string name="icon_theme_letter_keys">字母按鍵</string>
+    <string name="icon_theme_numpad_keys">數字鍵盤按鍵</string>
     <string name="icon_theme_toolbar_buttons">工具列按鈕</string>
     <string name="icon_theme_system_buttons">系統按鈕</string>
     <string name="icon_theme_customized">%1$s（%2$d 個已自訂）</string>
@@ -1239,4 +1248,11 @@
     <string name="rime_engine_version_value">librime 版本：%1$s</string>
     <string name="rime_engine_api_size_value">RimeApi 資料大小：%1$d 位元組</string>
     <string name="rime_engine_capabilities_value">偵測到的能力：%1$s</string>
+    <string name="alt_label_on_side">在側邊顯示劃動標籤</string>
+    <string name="alt_label_side">劃動標籤位置</string>
+    <string name="alt_label_side_left">左側</string>
+    <string name="alt_label_side_right">右側</string>
+    <string name="edit_button_icon_ascii">ASCII 模式圖示</string>
+    <string name="text_keyboard_layout_space_label">空白鍵標籤</string>
+    <string name="text_keyboard_layout_space_label_hint">留空時自動顯示目前的方案名稱（或中文／ASCII 狀態）。</string>
 </resources>

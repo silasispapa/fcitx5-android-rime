@@ -1315,6 +1315,8 @@ class TextKeyboard private constructor(
     private val spaceKeyLabelMode = AppPrefs.getInstance().keyboard.spaceKeyLabelMode
     private val swipeSymbolDirection = AppPrefs.getInstance().keyboard.swipeSymbolDirection
     private val punctuationPosition = ThemeManager.prefs.punctuationPosition
+    private val showKeyAltLabels = ThemeManager.prefs.showKeyAltLabels
+    private val moveMainTextForAltLabel = ThemeManager.prefs.moveMainTextForAltLabel
 
     /**
      * 语言键当前是否处于 ASCII 态（Rime 的 latin 子模式）。
@@ -1353,6 +1355,18 @@ class TextKeyboard private constructor(
     @Keep
     private val spaceKeyLabelModeListener = ManagedPreference.OnChangeListener<SpaceKeyLabelMode> { _, _ ->
         refreshSpaceLabelFromState()
+    }
+
+    @Keep
+    private val showKeyAltLabelsListener = ManagedPreference.OnChangeListener<Boolean> { _, _ ->
+        // 只重跑副标签布局，不重建键盘：开关要立刻生效，且不打断当前输入状态。
+        refreshAltLabelVisibility()
+    }
+
+    @Keep
+    private val moveMainTextForAltLabelListener = ManagedPreference.OnChangeListener<Boolean> { _, _ ->
+        // 图标层与主字符共用同一套让位规则，开关变化时一起重排。
+        refreshAltLabelVisibility()
     }
 
     private val keepLettersUppercase by AppPrefs.getInstance().keyboard.keepLettersUppercase
@@ -1505,10 +1519,11 @@ class TextKeyboard private constructor(
                 key != LAYOUT_META_KEY &&
                     key != "default" &&
                     key != "" &&
-                    // 排列形态变体（__variant__:...）是布局结构的一部分，不是"按方案细分"，
-                    // 不能让它把平铺布局判成"随子模式变化"——那会让行缓存在每次 Shift
-                    // 切换子模式时全部失效（见 usesSubMode 的说明）。
-                    !LayoutJsonUtils.isVariantSubModeLabel(key) &&
+                    // 排列形态变体（__variant__:...）与数字/符号层（__layer__:...）都是布局
+                    // 结构的一部分，不是"按方案细分"：把它们算进来会让平铺布局在中文与
+                    // ASCII 子模式之间生成不同签名，行缓存各存一份，切图标主题时只刷新当前
+                    // 那一份，另一模式复用旧行继续显示上一套图标（见 usesSubMode 的说明）。
+                    !LayoutJsonUtils.isReservedSubModeLabel(key) &&
                     parseLayoutArray(baseElement[key]) != null
             }
             if (hasSubModeLayout) return true
@@ -1825,6 +1840,8 @@ class TextKeyboard private constructor(
         spaceKeyLabelMode.registerOnChangeListener(spaceKeyLabelModeListener)
         swipeSymbolDirection.registerOnChangeListener(swipeSymbolDirectionListener)
         punctuationPosition.registerOnChangeListener(punctuationPositionListener)
+        showKeyAltLabels.registerOnChangeListener(showKeyAltLabelsListener)
+        moveMainTextForAltLabel.registerOnChangeListener(moveMainTextForAltLabelListener)
     }
 
     override fun onDetachedFromWindow() {
@@ -1833,6 +1850,8 @@ class TextKeyboard private constructor(
         spaceKeyLabelMode.unregisterOnChangeListener(spaceKeyLabelModeListener)
         swipeSymbolDirection.unregisterOnChangeListener(swipeSymbolDirectionListener)
         punctuationPosition.unregisterOnChangeListener(punctuationPositionListener)
+        showKeyAltLabels.unregisterOnChangeListener(showKeyAltLabelsListener)
+        moveMainTextForAltLabel.unregisterOnChangeListener(moveMainTextForAltLabelListener)
         super.onDetachedFromWindow()
     }
 
@@ -1963,6 +1982,16 @@ class TextKeyboard private constructor(
         // Compose-state switches may recreate key views; re-apply caps presentation immediately.
         updateCapsButtonIcon()
         updateAlphabetKeys()
+        // 合成态重绑会把空格键面重置成外观自带的文字：没有自定义标签的键要按方案名补回来，
+        // 否则进出合成态时方案名会变成一个空格。
+        refreshSpaceLabelFromState()
+    }
+
+    override fun onDeferredComposeRecreationsFlushed() {
+        super.onDeferredComposeRecreationsFlushed()
+        // If a held space key delayed its view replacement, the composition callback refreshed
+        // the old instance. Re-apply the scheme label after the new instance enters the tree.
+        refreshSpaceLabelFromState()
     }
 
     private fun transformPopupPreview(c: String): String {
@@ -2026,6 +2055,12 @@ class TextKeyboard private constructor(
         refreshCapsPresentation()
     }
 
+    override fun onIconThemeRefreshed() {
+        // Shift 图标按 CapsState 选槽位（keys.capslock.none/once/lock），而通用刷新只认构造期
+        // 固定的 none；这里按当前状态再校正一次，切图标主题时不会把已按下的 Shift 画回未按下。
+        updateCapsButtonIcon()
+    }
+
     private fun updateCapsButtonIcon() {
         val displayLock = isDisplayCapsOn()
         val slots = when (capsState) {
@@ -2067,6 +2102,10 @@ class TextKeyboard private constructor(
             // 纯外观键（空白占位键）：文字是用户指定的装饰内容，不参与任何状态改写。
             // 放在最前面短路，键面上写 "G" 就恒定是 "G"，不跟着 Shift/Caps 变。
             if (keyDef.staticDisplay) return@forEach
+            // 空格键的键面是「方案名 / 中英状态 / 用户自定义标签」，不是参与 Shift/Caps 的
+            // 字母键：标签写成单个字母（"a"）时不能跟着大小写改写。按视图 tag 判断而不是
+            // 看文本形态，标签内容可以是任何东西。
+            if (it.tag == R.id.button_space) return@forEach
             if (keyDef is KeyDef.Appearance.AltText) {
                 val renderedText = it.mainText.text.toString()
                 val sourceFromDef = renderedText.isEmpty() || renderedText == keyDef.displayText

@@ -10,6 +10,7 @@ import org.fcitx.fcitx5.android.input.keyboard.*
 import org.fcitx.fcitx5.android.input.keyboard.AuxBarConfig
 import org.fcitx.fcitx5.android.core.FcitxKeyMapping
 import org.fcitx.fcitx5.android.data.theme.ThemePrefs
+import org.fcitx.fcitx5.android.utils.ColorLiteral
 
 // Import Macro types explicitly
 import org.fcitx.fcitx5.android.input.keyboard.MacroAction
@@ -312,13 +313,7 @@ object LayoutJsonUtils {
             primitive.content
                 .trim()
                 .takeUnless { it.isEmpty() || it.equals("null", ignoreCase = true) }
-                ?.let { raw ->
-                    when {
-                        raw.startsWith("#") -> raw.removePrefix("#").toLongOrNull(16)?.toInt()
-                        raw.startsWith("0x", ignoreCase = true) -> raw.removePrefix("0x").toLongOrNull(16)?.toInt()
-                        else -> raw.toLongOrNull()?.toInt()
-                    }
-                }
+                ?.let { raw -> org.fcitx.fcitx5.android.utils.ColorLiteral.parseArgb(raw) }
         } else {
             primitive.intOrNull ?: primitive.longOrNull?.toInt()
         }
@@ -443,6 +438,7 @@ object LayoutJsonUtils {
             swipe = obj["swipe"]?.jsonObject?.let { parseMacroAction(it) },
             longPress = obj["longPress"]?.jsonObject?.let { parseMacroAction(it) },
             independentColor = independentColor,
+            iconSlot = obj["iconSlot"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
             composeOverride = composeOverride
         )
     }
@@ -743,11 +739,9 @@ object LayoutJsonUtils {
                         } else if (key == "sym") {
                             resolveKeysym(it)
                         } else {
-                            when {
-                                it.startsWith("#") -> it.removePrefix("#").toLongOrNull(16)?.toInt()
-                                it.startsWith("0x", ignoreCase = true) -> it.removePrefix("0x").toLongOrNull(16)?.toInt()
-                                else -> it.toLongOrNull()?.toInt()
-                            }
+                            // 颜色字段统一按 Android 颜色字面量解析：六位 #RRGGBB 必须补上
+                            // alpha=FF，否则保存进布局就是透明色（编辑器往返与运行时一致）。
+                            ColorLiteral.parseArgb(it)
                         }
                     }
             }
@@ -940,6 +934,11 @@ object LayoutJsonUtils {
          * 底色，那时透明反过来才是错的。
          */
         val transparent: Boolean? = null,
+        /**
+         * 主题图标槽位（见 `KeyDef.iconSlotOverride`）。任何键型都可以在布局里点名，
+         * 覆盖键型自带的槽位；留空表示沿用键型默认。
+         */
+        val iconSlot: String? = null,
         val composeOverride: KeyJson? = null
     )
 
@@ -1130,6 +1129,7 @@ object LayoutJsonUtils {
         if (keyDef.splitRowDisabled) {
             json["splitRowDisabled"] = true
         }
+        keyDef.iconSlotOverride?.let { json["iconSlot"] = it }
 
         return json
     }
@@ -1466,6 +1466,7 @@ object LayoutJsonUtils {
         // 布局文件平白多出一整片 `"splitAfter": false`，QR 分享的载荷也跟着膨胀。
         if (key.splitAfter == true) keyDef.splitAfter = true
         if (key.splitRowDisabled == true) keyDef.splitRowDisabled = true
+        key.iconSlot?.let { keyDef.iconSlotOverride = it }
         key.composeOverride?.let { override ->
             val overrideDef = createKeyDef(
                 override.copy(composeOverride = null, weight = null, rowHeightPercent = null),

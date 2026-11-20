@@ -443,6 +443,7 @@
     <!-- Auto-completed missing strings (fallback to zh-CN/en) -->
     <string name="_cannot_be_empty">%1$s은(는) 비워 둘 수 없습니다</string>
     <string name="back_to_keyboard">키보드로 돌아가기</string>
+    <string name="exit_inline_suggestions">자동 완성 제안 닫기</string>
     <string name="backspace">백스페이스</string>
     <string name="brightness">밝기</string>
     <string name="button_haptic_feedback">키 누를 때 햅틱 피드백</string>
@@ -785,4 +786,19 @@
     <string name="user_data_export_changed">백업 중에 데이터 파일이 계속 변경되었습니다. 외부 동기화나 편집을 일시 중지하고 다시 시도하세요.</string>
     <string name="user_data_exported">백업을 저장했습니다.</string>
     <string name="user_data_export_cleanup_failed">백업 쓰기에 실패했고 불완전한 파일을 삭제하지 못했습니다. 해당 파일을 수동으로 삭제하고 다시 시도하세요.</string>
+    <string name="alt_label_on_side">스와이프 레이블을 옆에 표시</string>
+    <string name="alt_label_side">스와이프 레이블 위치</string>
+    <string name="alt_label_side_left">왼쪽</string>
+    <string name="alt_label_side_right">오른쪽</string>
+    <string name="edit_button_icon_ascii">ASCII 모드 아이콘</string>
+    <string name="text_keyboard_layout_space_label">스페이스 키 레이블</string>
+    <string name="text_keyboard_layout_space_label_hint">비워 두면 현재 스키마 이름(또는 중국어/ASCII 상태)이 자동으로 표시됩니다.</string>
+    <string name="show_key_alt_labels">키 보조 레이블 표시</string>
+    <string name="show_key_alt_labels_summary">키에 표시되는 작은 안내 문구입니다. 영문 키에는 문장 부호, 기능 키에는 스와이프 안내가 표시됩니다.</string>
+    <string name="theme_kit_title">테마 세트를 함께 적용할까요?</string>
+    <string name="theme_kit_message">이 테마에는 맞춤 키보드 레이아웃, 아이콘 테마, 키 보조 레이블 글꼴, 키캡 스타일이 있습니다. \"%1$s\"와(과) 함께 적용할까요?</string>
+    <string name="theme_kit_apply_all">모두 적용</string>
+    <string name="theme_kit_theme_only">색상만</string>
+    <string name="icon_theme_letter_keys">영문 키</string>
+    <string name="icon_theme_numpad_keys">숫자 키</string>
 </resources>

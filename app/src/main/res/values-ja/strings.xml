@@ -612,6 +612,7 @@
 
     <!-- Auto-completed missing strings (fallback to zh-CN/en) -->
     <string name="back_to_keyboard">キーボードに戻る</string>
+    <string name="exit_inline_suggestions">自動入力候補を閉じる</string>
     <string name="backspace">Backspace</string>
     <string name="button_up_haptic_feedback">キーを離した時に振動</string>
     <string name="candidates_window">候補ウィンドウ</string>
@@ -783,4 +784,19 @@
     <string name="user_data_export_changed">バックアップ中にデータファイルが変更されました。外部同期や編集を一時停止して再試行してください。</string>
     <string name="user_data_exported">バックアップを保存しました。</string>
     <string name="user_data_export_cleanup_failed">バックアップの書き込みに失敗し、未完成のファイルを削除できませんでした。そのファイルを手動で削除して再試行してください。</string>
+    <string name="alt_label_on_side">スワイプラベルを横に表示</string>
+    <string name="alt_label_side">スワイプラベルの位置</string>
+    <string name="alt_label_side_left">左</string>
+    <string name="alt_label_side_right">右</string>
+    <string name="edit_button_icon_ascii">ASCII モードのアイコン</string>
+    <string name="text_keyboard_layout_space_label">スペースキーのラベル</string>
+    <string name="text_keyboard_layout_space_label_hint">空欄にすると、現在のスキーマ名（または中国語／ASCII の状態）が自動表示されます。</string>
+    <string name="show_key_alt_labels">キーの補助ラベルを表示</string>
+    <string name="show_key_alt_labels_summary">キーに表示される小さなヒントです。英字キーは約物、ファンクションキーはスワイプのヒントを示します。</string>
+    <string name="theme_kit_title">テーマセットをまとめて適用しますか？</string>
+    <string name="theme_kit_message">このテーマには対応するキーボードレイアウト、アイコンテーマ、キー補助ラベルのフォント、キートップのスタイルがあります。\"%1$s\" と一緒に適用しますか？</string>
+    <string name="theme_kit_apply_all">すべて適用</string>
+    <string name="theme_kit_theme_only">配色のみ</string>
+    <string name="icon_theme_letter_keys">英字キー</string>
+    <string name="icon_theme_numpad_keys">数字キー</string>
 </resources>

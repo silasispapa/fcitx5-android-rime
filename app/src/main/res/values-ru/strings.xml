@@ -333,6 +333,7 @@
     <string name="private_mode">Приватный режим (нажмите, чтобы открыть область состояния)</string>
     <string name="return_to_toolbar">Вернуться на панель инструментов</string>
     <string name="back_to_keyboard">Вернуться к клавиатуре</string>
+    <string name="exit_inline_suggestions">Закрыть предложения автозаполнения</string>
     <string name="backspace">Backspace</string>
     <string name="move_cursor_up">Переместить курсор вверх</string>
     <string name="move_cursor_right">Переместить курсор вправо</string>
@@ -784,4 +785,19 @@
     <string name="user_data_export_changed">Файл данных продолжал изменяться во время резервного копирования. Приостановите внешнюю синхронизацию или редактирование и повторите попытку.</string>
     <string name="user_data_exported">Резервная копия сохранена.</string>
     <string name="user_data_export_cleanup_failed">Не удалось записать резервную копию и удалить неполный файл. Удалите этот файл вручную и повторите попытку.</string>
+    <string name="alt_label_on_side">Показывать метки свайпа сбоку</string>
+    <string name="alt_label_side">Сторона метки свайпа</string>
+    <string name="alt_label_side_left">Слева</string>
+    <string name="alt_label_side_right">Справа</string>
+    <string name="edit_button_icon_ascii">Значок режима ASCII</string>
+    <string name="text_keyboard_layout_space_label">Надпись на клавише пробела</string>
+    <string name="text_keyboard_layout_space_label_hint">Оставьте пустым, чтобы автоматически показывать название схемы (или состояние «китайский/ASCII»).</string>
+    <string name="show_key_alt_labels">Показывать дополнительные метки клавиш</string>
+    <string name="show_key_alt_labels_summary">Мелкий текст на клавишах: знаки препинания на буквенных клавишах, подсказки свайпа на функциональных.</string>
+    <string name="theme_kit_title">Применить весь набор темы?</string>
+    <string name="theme_kit_message">У этой темы есть подходящая раскладка клавиатуры, тема значков, шрифт дополнительных меток клавиш и стиль колпачков клавиш. Применить их вместе с «%1$s»?</string>
+    <string name="theme_kit_apply_all">Применить всё</string>
+    <string name="theme_kit_theme_only">Только цвета</string>
+    <string name="icon_theme_letter_keys">Буквенные клавиши</string>
+    <string name="icon_theme_numpad_keys">Цифровые клавиши</string>
 </resources>

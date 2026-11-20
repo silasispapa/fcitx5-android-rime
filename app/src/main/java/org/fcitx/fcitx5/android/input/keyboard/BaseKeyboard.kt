@@ -135,7 +135,12 @@ abstract class BaseKeyboard(
             statisticsLayout = null
             return
         }
-        runCatching { KeyboardStatisticsLayout.capture(this, statisticsKeys.keys) }
+        runCatching {
+            // Row containers give every keycap an explicit row number, so side bar keys that are
+            // a pixel off from the main rows no longer become separate heatmap rows.
+            val rows = if (::keyRows.isInitialized) keyRows else emptyList()
+            KeyboardStatisticsLayout.capture(this, statisticsKeys.keys, rows)
+        }
             .onSuccess { if (it != statisticsLayout) statisticsLayout = it }
             .onFailure { Timber.w(it, "Unable to capture statistics keyboard geometry") }
     }
@@ -1671,17 +1676,60 @@ abstract class BaseKeyboard(
         invalidate()
     }
 
-    fun refreshIconTheme() {
+    /**
+     * 遍历当前行以及所有缓存行里的 KeyView。
+     *
+     * 行缓存按布局签名保存（中文与 ASCII 各自一份）。切图标主题时如果只看当前 keyRows，
+     * 另一模式缓存的键面仍持有上一套位图；等切到那个模式复用旧行，旧图标就又露出来。
+     */
+    private fun forEachKeyViewIncludingCachedRows(block: (KeyView) -> Unit) {
         if (!::keyRows.isInitialized) return
-        keyRows.forEach { row ->
-            row.children.forEach { child ->
-                (child as? KeyView)?.let { keyView ->
-                    when (keyView) {
-                        is ImageAltTextKeyView -> keyView.reapplyIconThemeOverride()
-                        is ImageTextKeyView -> keyView.reapplyIconThemeOverride()
-                        is ImageKeyView -> keyView.reapplyIconThemeOverride()
-                    }
-                }
+        val rows = LinkedHashSet<ConstraintLayout>(keyRows)
+        reusableRowsCache.values.forEach { rows.addAll(it.containers) }
+        fun visit(view: View) {
+            if (view is KeyView) {
+                block(view)
+                return
+            }
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) visit(view.getChildAt(i))
+            }
+        }
+        rows.forEach(::visit)
+    }
+
+    fun refreshIconTheme() {
+        forEachKeyViewIncludingCachedRows { keyView ->
+            when (keyView) {
+                is AltTextKeyView -> keyView.reapplyIconThemeOverride()
+                is ImageAltTextKeyView -> keyView.reapplyIconThemeOverride()
+                is ImageTextKeyView -> keyView.reapplyIconThemeOverride()
+                is ImageKeyView -> keyView.reapplyIconThemeOverride()
+            }
+        }
+        onIconThemeRefreshed()
+    }
+
+    /**
+     * 通用图标刷新的收尾钩子。
+     *
+     * [refreshIconTheme] 按构造期记录的固定槽位重画每一枚带图标的键；但有些键的图标取决于
+     * 运行状态而不是构造参数（例如 Shift 键在 none/once/lock 之间切换）。子类在这里按当前
+     * 状态再校正一次，避免切换图标主题后这类键回落到固定槽位。
+     */
+    protected open fun onIconThemeRefreshed() {}
+
+    /**
+     * 只刷新副标签的显隐，不重建键盘。
+     *
+     * 主题设置里的“显示按键副标签”开关走这里：两个 KeyView 都只是重新跑一遍布局模式判定，
+     * 不碰图标缓存、不重建视图，所以开关能即时生效，关掉也不会残留占位。
+     */
+    fun refreshAltLabelVisibility() {
+        forEachKeyViewIncludingCachedRows { keyView ->
+            when (keyView) {
+                is AltTextKeyView -> keyView.refreshAltTextLayout()
+                is ImageAltTextKeyView -> keyView.refreshAltTextLayout()
             }
         }
     }
@@ -1732,16 +1780,16 @@ abstract class BaseKeyboard(
         val activeAppearance = appearanceOverride ?: resolvedAppearance
         return when (activeAppearance) {
             is KeyDef.Appearance.ToolbarText -> ToolbarTextKeyView(context, theme, activeAppearance, horizontalGapScale)
-            is KeyDef.Appearance.AltText -> AltTextKeyView(context, theme, activeAppearance, horizontalGapScale)
-            is KeyDef.Appearance.ImageAltText -> ImageAltTextKeyView(context, theme, activeAppearance, horizontalGapScale, def.iconSlot)
-            is KeyDef.Appearance.ImageText -> ImageTextKeyView(context, theme, activeAppearance, horizontalGapScale, def.iconSlot)
+            is KeyDef.Appearance.AltText -> AltTextKeyView(context, theme, activeAppearance, horizontalGapScale, activeDef.effectiveIconSlot)
+            is KeyDef.Appearance.ImageAltText -> ImageAltTextKeyView(context, theme, activeAppearance, horizontalGapScale, activeDef.effectiveIconSlot)
+            is KeyDef.Appearance.ImageText -> ImageTextKeyView(context, theme, activeAppearance, horizontalGapScale, activeDef.effectiveIconSlot)
             is KeyDef.Appearance.Text -> TextKeyView(context, theme, activeAppearance, horizontalGapScale)
             is KeyDef.Appearance.Image -> ImageKeyView(
                 context,
                 theme,
                 activeAppearance,
                 horizontalGapScale,
-                def.iconSlot,
+                activeDef.effectiveIconSlot,
                 // 语言键在 ASCII 态换另一枚图标（与工具栏语言切换按钮同款逻辑），
                 // 其余图标键没有 ASCII 变体。
                 if (def is LanguageKey) LanguageKey.ICON_SLOT_ASCII else null,
@@ -1765,8 +1813,10 @@ abstract class BaseKeyboard(
                 // 仅 SpaceKey 支持在布局编辑器里配置划动动作；MiniSpaceKey 保持纯光标语义。
                 val swipeAction = (def as? SpaceKey)?.swipe
                 // 自定义空格标签：空/纯空白视为未设置，交回 TextKeyboard 按方案名显示。
+                // 取 activeDef 而不是基础 def：合成态用的是 composeOverride 里的键定义，
+                // 标签也必须跟着换，否则合成时仍显示普通态的标签。
                 (this as? TextKeyView)?.spaceLabelOverride =
-                    (def as? SpaceKey)?.label?.takeIf { it.isNotBlank() }
+                    (activeDef as? SpaceKey)?.label?.takeIf { it.isNotBlank() }
                 registerSpaceKeyEntry(this, swipeAction)
                 swipeEnabled = spaceSwipeEnabledFor(swipeAction)
                 swipeRepeatEnabled = true
@@ -1952,9 +2002,7 @@ abstract class BaseKeyboard(
             // 自定义空格标签要在 applyAppearance 之后再落一次：applyAppearance 会把
             // mainText 重置成 displayText（空格），而编辑器预览没有 TextKeyboard 的
             // updateSpaceLabel 兜底，不在这里写就会看到空白键面。
-            (this as? TextKeyView)?.let { view ->
-                view.spaceLabelOverride?.let { view.mainText.text = it }
-            }
+            applySpaceLabelOverride(this, activeDef)
             // 空格键的「长按重复输入」在 applyBehaviorPopupBindings 内部按视图重绑
             // （它会先清空 repeat 回调，所以由它自己收尾最稳），这里不再单独调用。
             applyBehaviorPopupBindings(this, baseline, activeDef.behaviors, activeDef.popup)
@@ -1985,6 +2033,23 @@ abstract class BaseKeyboard(
         }
     }
 
+    /**
+     * 把键定义里的空格键自定义标签写到视图上。
+     *
+     * [applyAppearance] 会把 `mainText` 重置成外观自带的 `displayText`（空格），所以创建、
+     * 合成态重绑、视图重建三条路径都要在它之后补写一次，否则标签只在首次创建时可见——
+     * 进出合成态或重建视图后键面会退回空白/方案名。
+     *
+     * 这里连同 [TextKeyView.spaceLabelOverride] 一起刷新：合成态用的是 `composeOverride`
+     * 里的键定义，标签也要跟着换；只重写文字的话，下一次重绑仍会拿着普通态的旧标签。
+     * 未配置标签时清空 override，交给 `TextKeyboard.updateSpaceLabel` 按方案名显示。
+     */
+    private fun applySpaceLabelOverride(view: KeyView, def: KeyDef) {
+        val textView = view as? TextKeyView ?: return
+        textView.spaceLabelOverride = (def as? SpaceKey)?.label?.takeIf { it.isNotBlank() }
+        textView.spaceLabelOverride?.let { label -> textView.mainText.text = label }
+    }
+
     open fun onCompositionStateChanged(composing: Boolean) {
         if (this.composing == composing) return
         this.composing = composing
@@ -2002,7 +2067,7 @@ abstract class BaseKeyboard(
 
         val updates = composeAwareKeys.map { item ->
             val (activeDef, activeAppearance) = resolveComposeActiveDef(item.baseDef)
-            val needsRecreate = shouldRecreateComposeAwareView(item.keyView.def, item.keyView, activeAppearance)
+            val needsRecreate = shouldRecreateComposeAwareView(item.keyView, activeDef, activeAppearance)
             PendingUpdate(item, activeDef, activeAppearance, needsRecreate)
         }
 
@@ -2037,6 +2102,9 @@ abstract class BaseKeyboard(
 
         updates.forEach { u ->
             applyAppearance(u.item.keyView, u.activeAppearance)
+            // 合成态切换会把键面文字重置成外观自带的 displayText，自定义空格标签要跟着
+            // activeDef 重新落一次（合成态用的是 composeOverride 里的键定义）。
+            applySpaceLabelOverride(u.item.keyView, u.activeDef)
             applyBehaviorPopupBindings(u.item.keyView, u.item.baseline, u.activeDef.behaviors, u.activeDef.popup)
         }
 
@@ -2073,7 +2141,7 @@ abstract class BaseKeyboard(
         try {
             ready.forEach { item ->
                 val (activeDef, activeAppearance) = resolveComposeActiveDef(item.baseDef)
-                if (shouldRecreateComposeAwareView(item.keyView.def, item.keyView, activeAppearance)) {
+                if (shouldRecreateComposeAwareView(item.keyView, activeDef, activeAppearance)) {
                     recreateComposeAwareKeyView(item, activeDef, activeAppearance)
                 }
             }
@@ -2085,13 +2153,18 @@ abstract class BaseKeyboard(
                 keyRows.flatMap { row -> row.children.mapNotNull { it as? KeyView }.toList() }
             )
         }
+        onDeferredComposeRecreationsFlushed()
     }
 
+    /** Called after deferred compose-aware views have been swapped into the keyboard tree. */
+    protected open fun onDeferredComposeRecreationsFlushed() = Unit
+
     private fun shouldRecreateComposeAwareView(
-        oldAppearance: KeyDef.Appearance,
         currentView: KeyView,
+        newDef: KeyDef,
         newAppearance: KeyDef.Appearance
     ): Boolean {
+        val oldAppearance = currentView.def
         if (!isAppearanceCompatible(currentView, newAppearance)) return true
 
         val textMetricsChanged = when {
@@ -2105,7 +2178,12 @@ abstract class BaseKeyboard(
 
         // Recreate only when style-affecting attributes changed. For text/action-only changes,
         // keep the same view instance to avoid touch race and expensive hierarchy churn.
-        return oldAppearance.variant != newAppearance.variant ||
+        // 合成态可能换成另一枚外观（含另一枚图标槽位）：视图只在构造时绑定图标槽位，
+        // 槽位不同就必须重建，否则键面继续显示普通态的主题图标。
+        val iconSlotChanged = currentView.themedIconSlot != newDef.effectiveIconSlot
+
+        return iconSlotChanged ||
+            oldAppearance.variant != newAppearance.variant ||
             oldAppearance.border != newAppearance.border ||
             oldAppearance.margin != newAppearance.margin ||
             oldAppearance.percentWidth != newAppearance.percentWidth ||
@@ -2178,6 +2256,8 @@ abstract class BaseKeyboard(
             onGestureListener = newView.onGestureListener
         )
         applyAppearance(newView, appearance)
+        // createKeyView 里已经写过一次标签，但这里又 applyAppearance 了一遍，需要再补。
+        applySpaceLabelOverride(newView, def)
     }
 
     private fun applyConfiguredFonts(keyView: KeyView) {

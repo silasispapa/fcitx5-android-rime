@@ -69,9 +69,13 @@ abstract class KeyView(
 ) :
     CustomGestureView(ctx) {
 
-    private companion object {
-        private const val THEME_COLOR_REF_PREFIX = "theme:"
-    }
+    /**
+     * 构造时绑定的主题图标槽位，由持有图层的子类覆盖。
+     *
+     * 合成态可能换成 `composeOverride` 里的键定义，槽位跟着变；[BaseKeyboard] 在合成态
+     * 切换时比对它，不一致就重建视图，否则键面会继续显示基础键的图标。
+     */
+    open val themedIconSlot: String? get() = null
 
     val bordered: Boolean
     val borderStroke: Boolean
@@ -171,48 +175,8 @@ abstract class KeyView(
         add(appearanceView, lParams(matchParent, matchParent))
     }
 
-    private fun resolveMonetColor(resourceName: String?): Int? {
-        val name = resourceName?.takeIf { it.isNotBlank() } ?: return null
-        val colorResId = context.resources.getIdentifier(name, "color", "android")
-        if (colorResId == 0) return null
-        return runCatching { context.getColor(colorResId) }.getOrNull()
-    }
-
-    private fun resolveThemeTokenColor(theme: Theme, token: String): Int? {
-        return when (token) {
-            "backgroundColor" -> theme.backgroundColor
-            "barColor" -> theme.barColor
-            "keyboardColor" -> theme.keyboardColor
-            "keyBackgroundColor" -> theme.keyBackgroundColor
-            "keyTextColor" -> theme.keyTextColor
-            "candidateTextColor" -> theme.candidateTextColor
-            "candidateLabelColor" -> theme.candidateLabelColor
-            "candidateCommentColor" -> theme.candidateCommentColor
-            "altKeyBackgroundColor" -> theme.altKeyBackgroundColor
-            "altKeyTextColor" -> theme.altKeyTextColor
-            "accentKeyBackgroundColor" -> theme.accentKeyBackgroundColor
-            "accentKeyTextColor" -> theme.accentKeyTextColor
-            "keyPressHighlightColor" -> theme.keyPressHighlightColor
-            "keyShadowColor" -> theme.keyShadowColor
-            "popupBackgroundColor" -> theme.popupBackgroundColor
-            "popupTextColor" -> theme.popupTextColor
-            "spaceBarColor" -> theme.spaceBarColor
-            "dividerColor" -> theme.dividerColor
-            "clipboardEntryColor" -> theme.clipboardEntryColor
-            "genericActiveBackgroundColor" -> theme.genericActiveBackgroundColor
-            "genericActiveForegroundColor" -> theme.genericActiveForegroundColor
-            else -> null
-        }
-    }
-
     private fun resolveColorOverride(staticColor: Int?, colorRef: String?, theme: Theme = this.theme): Int? {
-        val refValue = colorRef?.takeIf { it.isNotBlank() }
-        val resolved = if (refValue != null && refValue.startsWith(THEME_COLOR_REF_PREFIX)) {
-            resolveThemeTokenColor(theme, refValue.removePrefix(THEME_COLOR_REF_PREFIX))
-        } else {
-            resolveMonetColor(refValue)
-        }
-        return resolved ?: staticColor
+        return LayoutKeyColorResolver.resolve(context, theme, staticColor, colorRef)
     }
 
     protected fun resolveBackgroundColor(theme: Theme, defaultColor: Int): Int {
@@ -678,9 +642,18 @@ class AltTextKeyView(
     ctx: Context,
     theme: Theme,
     def: KeyDef.Appearance.AltText,
-    horizontalGapScale: Float = 1f
+    horizontalGapScale: Float = 1f,
+    /**
+     * 主题图标槽位（字母键是 `keys.letter.<小写字母>`）。
+     *
+     * 非空且主题里配了该槽位时，图标作为键面**底层**：主字符隐藏，副标签仍按原有布局
+     * 叠在图标上层（叠加，而不是各占一半位置）。主题没配该槽位时整层 GONE，键面与
+     * 以前完全一致。
+     */
+    private val iconSlot: String? = null
 ) :
     TextKeyView(ctx, theme, def, horizontalGapScale), SwipeHintAwareKeyView {
+    override val themedIconSlot: String? get() = iconSlot
     private enum class AltTextLayoutMode {
         TopRight,
         TopCenter,
@@ -721,6 +694,37 @@ class AltTextKeyView(
         )
 
     private var lastLayoutMode: AltTextLayoutMode? = null
+
+    /**
+     * 手势方向用的布局：与副标签是否显示无关。
+     *
+     * 关掉副标签只是不画，键上仍然有上/下滑标签；如果手势也按 Hidden 走，就会退回
+     * [SwipeSymbolDirection] 的默认方向，同一个键的可用滑动方向被主题设置改掉。
+     */
+    private var lastGestureLayoutMode: AltTextLayoutMode? = null
+
+    /** 上次布局时“副标签存在时移动主字符”的取值；开关变了要重排图标层。 */
+    private var lastMoveMainTextForAltLabel: Boolean? = null
+
+    /**
+     * 键面图标层。插在 [appearanceView] 的 index 0，也就是主字符下面：
+     * 先画图标、再画副标签，文字自然叠在图标之上。
+     */
+    val img = imageView {
+        isClickable = false
+        isFocusable = false
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        visibility = View.GONE
+    }
+
+    /** null = 还没解析过图标；false = SVG 自带配色，不跟随主题文字色。 */
+    private var iconThemeTintWithTheme: Boolean? = null
+
+    /** 图标层边长（px，8px 分桶）；0 表示还没测到键面尺寸。 */
+    private var iconSizePx = 0
+
+    /** 多色图标当前用的笔画色（键面文字色）；主题换了要按新颜色重新光栅化。 */
+    private var iconInkColor: Int? = null
 
     val altText = view(::AutoScaleTextView) {
         isClickable = false
@@ -787,6 +791,8 @@ class AltTextKeyView(
 
     init {
         appearanceView.apply {
+            // 图标在最底层：TextKeyView 已经把 mainText 加进来了，这里插到 index 0。
+            addView(img, 0, lParams(0, 0) { centerInParent() })
             add(altText, lParams(0, wrapContent))
             add(altText1, lParams(0, wrapContent))
         }
@@ -800,6 +806,7 @@ class AltTextKeyView(
         altText1.setTextSize(TypedValue.COMPLEX_UNIT_SP, resolveBaseAltTextSizeSp() * scale)
         altText1.requestLayout()
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
     }
 
@@ -810,7 +817,7 @@ class AltTextKeyView(
     private fun applyCornerAltTextPosition(
         label: AutoScaleTextView,
         atTop: Boolean,
-        atStart: Boolean,
+        atLeft: Boolean,
         hideSibling: Boolean = true
     ) {
         if (hideSibling) {
@@ -834,34 +841,36 @@ class AltTextKeyView(
             bottomToBottom = if (atTop) unset else parentId
             leftToLeft = parentId
             rightToRight = parentId
-            leftMargin = if (atStart) hMargin + cornerLabelHorizontalSafeInset else hMargin
-            rightMargin = if (atStart) hMargin else hMargin + cornerLabelHorizontalSafeInset
+            leftMargin = if (atLeft) hMargin + cornerLabelHorizontalSafeInset else hMargin
+            rightMargin = if (atLeft) hMargin else hMargin + cornerLabelHorizontalSafeInset
             topMargin = if (atTop) vMargin + cornerLabelTopSafeInset else 0
             bottomMargin = if (atTop) 0 else vMargin + dp(2)
         }
         applyCornerAltTextPadding(label)
-        label.gravity = (if (atStart) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL
+        // 设置里的左右是**物理**左右，边距也是按 left/right 写的，所以这里必须用
+        // LEFT/RIGHT：Gravity.START/END 在 RTL 布局下会解析成相反方向，标签会跑到另一边。
+        label.gravity = (if (atLeft) Gravity.LEFT else Gravity.RIGHT) or Gravity.CENTER_VERTICAL
     }
 
     private fun applyTopRightAltTextPosition(
         label: AutoScaleTextView = altText,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = true, atStart = false, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = true, atLeft = false, hideSibling = hideSibling)
 
     private fun applyTopLeftAltTextPosition(
         label: AutoScaleTextView = altText,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = true, atStart = true, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = true, atLeft = true, hideSibling = hideSibling)
 
     private fun applyBottomRightAltTextPosition(
         label: AutoScaleTextView,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = false, atStart = false, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = false, atLeft = false, hideSibling = hideSibling)
 
     private fun applyBottomLeftAltTextPosition(
         label: AutoScaleTextView,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = false, atStart = true, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = false, atLeft = true, hideSibling = hideSibling)
 
     private fun applyTopCenterAltTextPosition(label: AutoScaleTextView = altText) {
         val hidden = if (label === altText) altText1 else altText
@@ -931,6 +940,44 @@ class AltTextKeyView(
         label.gravity = Gravity.CENTER
     }
 
+    /**
+     * 图标层与主字符共用同一条“有副标签就上移”的规则。
+     *
+     * 只有把主字符顶到标签上方的那两种底部布局才跟着上移：[AltTextLayoutMode.Bottom]
+     * 的标签在 [altText]，方向性下滑标签在 [altText1]；角落标签压在键角上，主字符保持
+     * 居中，图标也不动。每次布局都重设上下约束，避免从底部模式切到其它模式时留下旧锚点。
+     */
+    private fun applyIconLayerPosition(mode: AltTextLayoutMode) {
+        if (iconSlot == null) return
+        val bottomLabel = when (mode) {
+            AltTextLayoutMode.Bottom -> altText
+            AltTextLayoutMode.DirectionalDownBottom -> altText1
+            else -> null
+        }
+        val move = bottomLabel != null &&
+            ThemeManager.prefs.moveMainTextForAltLabel.getValue()
+        img.updateLayoutParams<ConstraintLayout.LayoutParams> {
+            startToStart = parentId
+            endToEnd = parentId
+            if (move) {
+                topToTop = parentId
+                topToBottom = unset
+                bottomToBottom = unset
+                bottomToTop = bottomLabel!!.existingOrNewId
+                topMargin = vMargin
+                bottomMargin = 0
+            } else {
+                centerInParent()
+                topToTop = parentId
+                topToBottom = unset
+                bottomToBottom = parentId
+                bottomToTop = unset
+                topMargin = 0
+                bottomMargin = 0
+            }
+        }
+    }
+
     private fun applyDirectionalTopBottomAltTextPosition() {
         val hasUpLabel = !altText.text.isNullOrBlank()
         val hasDownLabel = !altText1.text.isNullOrBlank()
@@ -980,7 +1027,7 @@ class AltTextKeyView(
         }
     }
 
-    private fun applyDirectionalCornersAltTextPosition(atStart: Boolean = false) {
+    private fun applyDirectionalCornersAltTextPosition(atLeft: Boolean = false) {
         val hasUpLabel = !altText.text.isNullOrBlank()
         val hasDownLabel = !altText1.text.isNullOrBlank()
         mainText.updateLayoutParams<ConstraintLayout.LayoutParams> {
@@ -997,10 +1044,10 @@ class AltTextKeyView(
         altText.visibility = if (hasUpLabel) View.VISIBLE else View.GONE
         altText1.visibility = if (hasDownLabel) View.VISIBLE else View.GONE
         if (hasUpLabel) {
-            applyCornerAltTextPosition(altText, atTop = true, atStart = atStart, hideSibling = false)
+            applyCornerAltTextPosition(altText, atTop = true, atLeft = atLeft, hideSibling = false)
         }
         if (hasDownLabel) {
-            applyCornerAltTextPosition(altText1, atTop = false, atStart = atStart, hideSibling = false)
+            applyCornerAltTextPosition(altText1, atTop = false, atLeft = atLeft, hideSibling = false)
         }
     }
 
@@ -1019,7 +1066,13 @@ class AltTextKeyView(
         altText.gravity = Gravity.CENTER
     }
 
-    private fun resolveLayoutMode(keyHeight: Int): AltTextLayoutMode {
+    /**
+     * 副标签的几何布局：只看标签内容与键高，**不看**「显示按键副标签」这个开关。
+     *
+     * 手势方向必须基于这个结果：开关关掉时标签不画，但键上的上/下滑标签仍然存在，
+     * 方向不能跟着一起消失（见 [shouldTriggerAltBySwipe]）。
+     */
+    private fun resolveGestureLayoutMode(keyHeight: Int): AltTextLayoutMode {
         val pref = punctuationPositionForKey()
         if (def.directionalSwipeLabels) {
             // 方向性标签（上滑/下滑标签）的位置只由标签自己的方向决定：上滑标签在上面、
@@ -1033,16 +1086,16 @@ class AltTextKeyView(
             // 主题里手动开启「副标签显示在侧边」后，位置只由该设置决定，不再看键高：
             // 上标签贴所选侧的顶角、下标签贴同侧的底角。
             if (ThemeManager.prefs.altLabelOnSide.getValue()) {
-                val atStart = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
+                val atLeft = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
                 return when {
                     hasUpLabel && hasDownLabel ->
-                        if (atStart) AltTextLayoutMode.DirectionalCornersLeft
+                        if (atLeft) AltTextLayoutMode.DirectionalCornersLeft
                         else AltTextLayoutMode.DirectionalCorners
                     hasUpLabel ->
-                        if (atStart) AltTextLayoutMode.DirectionalUpTopLeft
+                        if (atLeft) AltTextLayoutMode.DirectionalUpTopLeft
                         else AltTextLayoutMode.DirectionalUpTopRight
                     else ->
-                        if (atStart) AltTextLayoutMode.DirectionalDownBottomLeft
+                        if (atLeft) AltTextLayoutMode.DirectionalDownBottomLeft
                         else AltTextLayoutMode.DirectionalDownBottomRight
                 }
             }
@@ -1100,12 +1153,12 @@ class AltTextKeyView(
         // 上滑标签贴所选侧的顶角、下滑标签贴同侧的底角。位置只由该设置决定，不再看键高，
         // 与方向性标签分支保持一致；滑动方向不变（顶部标签仍上滑、底部标签仍下滑）。
         if (ThemeManager.prefs.altLabelOnSide.getValue()) {
-            val atStart = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
+            val atLeft = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
             return when (preferred) {
                 AltTextLayoutMode.TopRight, AltTextLayoutMode.TopCenter ->
-                    if (atStart) AltTextLayoutMode.TopLeft else AltTextLayoutMode.TopRight
+                    if (atLeft) AltTextLayoutMode.TopLeft else AltTextLayoutMode.TopRight
                 AltTextLayoutMode.Bottom ->
-                    if (atStart) AltTextLayoutMode.BottomLeft else AltTextLayoutMode.BottomRight
+                    if (atLeft) AltTextLayoutMode.BottomLeft else AltTextLayoutMode.BottomRight
                 else -> AltTextLayoutMode.Hidden
             }
         }
@@ -1137,10 +1190,23 @@ class AltTextKeyView(
         }
     }
 
+    /** 副标签的绘制布局：开关关掉时直接 Hidden，不占位、不重新测量，键面只剩图标或主字符。 */
+    private fun resolveLayoutMode(keyHeight: Int): AltTextLayoutMode =
+        if (ThemeManager.prefs.showKeyAltLabels.getValue()) resolveGestureLayoutMode(keyHeight)
+        else AltTextLayoutMode.Hidden
+
     private fun applyLayout(keyHeight: Int = appearanceView.height): Boolean {
-        val mode = resolveLayoutMode(keyHeight)
-        if (mode == lastLayoutMode) return false
+        val iconLayerChanged = updateIconLayerSize(height = keyHeight)
+        val gestureMode = resolveGestureLayoutMode(keyHeight)
+        val mode = if (ThemeManager.prefs.showKeyAltLabels.getValue()) gestureMode
+        else AltTextLayoutMode.Hidden
+        val moveMainText = ThemeManager.prefs.moveMainTextForAltLabel.getValue()
+        if (mode == lastLayoutMode && gestureMode == lastGestureLayoutMode &&
+            moveMainText == lastMoveMainTextForAltLabel
+        ) return iconLayerChanged
         lastLayoutMode = mode
+        lastGestureLayoutMode = gestureMode
+        lastMoveMainTextForAltLabel = moveMainText
         val keepDirectionalLabel = when (mode) {
             AltTextLayoutMode.DirectionalUpTopRight,
             AltTextLayoutMode.DirectionalUpTopLeft,
@@ -1170,20 +1236,107 @@ class AltTextKeyView(
             AltTextLayoutMode.DirectionalTopBottom -> applyDirectionalTopBottomAltTextPosition()
             AltTextLayoutMode.DirectionalCorners -> applyDirectionalCornersAltTextPosition()
             AltTextLayoutMode.DirectionalCornersLeft ->
-                applyDirectionalCornersAltTextPosition(atStart = true)
+                applyDirectionalCornersAltTextPosition(atLeft = true)
             AltTextLayoutMode.Hidden -> applyNoAltTextPosition()
         }
+        applyIconLayerPosition(mode)
         return true
     }
 
     fun refreshAltTextLayout() {
         lastLayoutMode = null
+        lastGestureLayoutMode = null
+        lastMoveMainTextForAltLabel = null
         applyLayout()
+    }
+
+    /**
+     * 重新解析主题图标（切主题 / 切图标主题时由 BaseKeyboard.refreshIconTheme 调用）。
+     */
+    fun reapplyIconThemeOverride() {
+        if (iconSlot == null) return
+        if (iconSizePx > 0) applyIconDrawable(iconSizePx)
+        lastLayoutMode = null
+        lastGestureLayoutMode = null
+        applyLayout()
+    }
+
+    /**
+     * 按当前键面尺寸调整图标层，返回是否真的改了布局。
+     *
+     * 图标盒只由键高决定，与键宽无关。主题里的图标共用同一个 viewBox（水彩是
+     * 0 0 66.4 66.4），同一个框才能画出同一个大小；以前按 min(宽, 高) 取框，?123
+     * 这类宽键的框比字母键大一半，同一张图在宽键上就大一圈。键太矮时按比例收一次，
+     * 免得图标顶出键面。
+     *
+     * 尺寸按 8px 分桶：键面尺寸抖几个像素不值得重新栅格化一次 SVG（每次都是一次
+     * androidSVG 解析 + 一张位图），而 8px 的差别在键面上看不出来。
+     */
+    private fun updateIconLayerSize(
+        width: Int = appearanceView.measuredWidth,
+        height: Int = appearanceView.measuredHeight
+    ): Boolean {
+        if (iconSlot == null) return false
+        if (width <= 0 || height <= 0) return false
+        val fixed = (KEY_ICON_SIZE_DP * resources.displayMetrics.density).roundToInt()
+        val raw = min(fixed, (height * KEY_ICON_MAX_RATIO).roundToInt())
+        val size = max(8, raw / 8 * 8)
+        if (size == iconSizePx) return false
+        iconSizePx = size
+        img.updateLayoutParams<ConstraintLayout.LayoutParams> {
+            this.width = size
+            this.height = size
+        }
+        applyIconDrawable(size)
+        return true
+    }
+
+    private fun applyIconDrawable(sizePx: Int) {
+        val slot = iconSlot ?: return
+        val ink = iconTextColor()
+        iconInkColor = ink
+        val info = IconThemeManager.resolveIconDrawableInfo(slot, sizePx, ink)
+        if (info == null) {
+            iconThemeTintWithTheme = null
+            img.setImageDrawable(null)
+            img.visibility = View.GONE
+            mainText.visibility = View.VISIBLE
+            // 主字符回来了，无障碍描述交还给文字本身，别留下上一个主题的字母。
+            contentDescription = null
+            return
+        }
+        iconThemeTintWithTheme = info.tintWithTheme
+        img.setImageDrawable(info.drawable)
+        applyIconTint()
+        img.visibility = View.VISIBLE
+        // 有图标时主字符让位：图标就是键面主体，文字副标签仍叠在上层。
+        mainText.visibility = View.GONE
+        // 主字符 GONE 之后 TalkBack 就只剩副标签可读了，把字母挂到键的无障碍描述上。
+        contentDescription = mainText.text?.toString()?.takeIf { it.isNotBlank() }
+    }
+
+    /** 图标层该用的文字色：多色图标拿它替换近黑笔画，单色图标直接 tint 成这个颜色。 */
+    private fun iconTextColor(): Int = resolveTextColor(
+        when (def.variant) {
+            Variant.Normal -> theme.keyTextColor
+            Variant.AltForeground, Variant.Alternative -> theme.altKeyTextColor
+            Variant.Accent -> theme.accentKeyTextColor
+        }
+    )
+
+    private fun applyIconTint() {
+        if (iconThemeTintWithTheme == false) {
+            // SVG 自带配色（多色图标）时不套主题文字色，否则会把原色一起染掉。
+            img.imageTintList = null
+            img.drawable?.setTintList(null)
+            return
+        }
+        img.imageTintList = ColorStateList.valueOf(iconTextColor())
     }
 
     override fun shouldTriggerAltBySwipe(totalY: Int, fallback: SwipeSymbolDirection): Boolean {
         if (totalY == 0) return false
-        return when (lastLayoutMode ?: resolveLayoutMode(appearanceView.height)) {
+        return when (lastGestureLayoutMode ?: resolveGestureLayoutMode(appearanceView.height)) {
             AltTextLayoutMode.Bottom,
             AltTextLayoutMode.BottomLeft,
             AltTextLayoutMode.BottomRight -> totalY > 0
@@ -1210,6 +1363,7 @@ class AltTextKeyView(
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
     }
 
@@ -1233,8 +1387,28 @@ class AltTextKeyView(
                 }
             )
         )
+        applyIconTint()
+        // 多色图标的近黑笔画是按旧文字色烧进位图的，主题一换就得按新颜色重新光栅化；
+        // 单色图标靠 tint，不受影响。
+        if (iconThemeTintWithTheme == false && iconSlot != null && iconSizePx > 0 &&
+            iconInkColor != iconTextColor()
+        ) {
+            applyIconDrawable(iconSizePx)
+        }
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
+    }
+
+    private companion object {
+        /**
+         * 图标盒边长（dp）。图标 SVG 墨迹通常只占 viewBox 的六到七成，24dp 的盒子落到
+         * 键面上，字形高度约等于键高的三成，与主字符被替换掉时的大小相当。
+         */
+        private const val KEY_ICON_SIZE_DP = 24f
+
+        /** 键面太矮时的上限比例，避免图标顶出键面。 */
+        private const val KEY_ICON_MAX_RATIO = 0.68f
     }
 }
 
@@ -1246,6 +1420,7 @@ class ImageAltTextKeyView(
     horizontalGapScale: Float = 1f,
     private val iconSlot: String? = null
 ) : KeyView(ctx, theme, def, horizontalGapScale), SwipeHintAwareKeyView {
+    override val themedIconSlot: String? get() = iconSlot
     private enum class AltTextLayoutMode {
         TopRight,
         TopCenter,
@@ -1287,6 +1462,14 @@ class ImageAltTextKeyView(
 
     private var currentMainTextScale = 1f
     private var lastLayoutMode: AltTextLayoutMode? = null
+
+    /**
+     * 手势方向用的布局：与副标签是否显示无关。
+     *
+     * 关掉副标签只是不画，键上仍然有上/下滑标签；如果手势也按 Hidden 走，就会退回
+     * [SwipeSymbolDirection] 的默认方向，同一个键的可用滑动方向被主题设置改掉。
+     */
+    private var lastGestureLayoutMode: AltTextLayoutMode? = null
     private var iconThemeTintWithTheme: Boolean? = null
 
     // Reused for measuring main-text height in resolveLayoutMode().
@@ -1423,6 +1606,7 @@ class ImageAltTextKeyView(
         altText1.requestLayout()
         invalidateTextMetricsCache()
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
     }
 
@@ -1433,7 +1617,7 @@ class ImageAltTextKeyView(
     private fun applyCornerAltTextPosition(
         label: AutoScaleTextView,
         atTop: Boolean,
-        atStart: Boolean,
+        atLeft: Boolean,
         hideSibling: Boolean = true
     ) {
         if (hideSibling) {
@@ -1460,34 +1644,36 @@ class ImageAltTextKeyView(
             bottomToBottom = if (atTop) unset else parentId
             leftToLeft = parentId
             rightToRight = parentId
-            leftMargin = if (atStart) hMargin + cornerLabelHorizontalSafeInset else hMargin
-            rightMargin = if (atStart) hMargin else hMargin + cornerLabelHorizontalSafeInset
+            leftMargin = if (atLeft) hMargin + cornerLabelHorizontalSafeInset else hMargin
+            rightMargin = if (atLeft) hMargin else hMargin + cornerLabelHorizontalSafeInset
             topMargin = if (atTop) vMargin + cornerLabelTopSafeInset else 0
             bottomMargin = if (atTop) 0 else vMargin + dp(2)
         }
         applyCornerAltTextPadding(label)
-        label.gravity = (if (atStart) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL
+        // 设置里的左右是**物理**左右，边距也是按 left/right 写的，所以这里必须用
+        // LEFT/RIGHT：Gravity.START/END 在 RTL 布局下会解析成相反方向，标签会跑到另一边。
+        label.gravity = (if (atLeft) Gravity.LEFT else Gravity.RIGHT) or Gravity.CENTER_VERTICAL
     }
 
     private fun applyTopRightAltTextPosition(
         label: AutoScaleTextView = altText,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = true, atStart = false, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = true, atLeft = false, hideSibling = hideSibling)
 
     private fun applyTopLeftAltTextPosition(
         label: AutoScaleTextView = altText,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = true, atStart = true, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = true, atLeft = true, hideSibling = hideSibling)
 
     private fun applyBottomRightAltTextPosition(
         label: AutoScaleTextView,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = false, atStart = false, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = false, atLeft = false, hideSibling = hideSibling)
 
     private fun applyBottomLeftAltTextPosition(
         label: AutoScaleTextView,
         hideSibling: Boolean = true
-    ) = applyCornerAltTextPosition(label, atTop = false, atStart = true, hideSibling = hideSibling)
+    ) = applyCornerAltTextPosition(label, atTop = false, atLeft = true, hideSibling = hideSibling)
 
     private fun applyTopCenterAltTextPosition(label: AutoScaleTextView = altText) {
         val hidden = if (label === altText) altText1 else altText
@@ -1611,7 +1797,7 @@ class ImageAltTextKeyView(
         }
     }
 
-    private fun applyDirectionalCornersAltTextPosition(atStart: Boolean = false) {
+    private fun applyDirectionalCornersAltTextPosition(atLeft: Boolean = false) {
         val hasUpLabel = !altText.text.isNullOrBlank()
         val hasDownLabel = !altText1.text.isNullOrBlank()
         img.updateLayoutParams<ConstraintLayout.LayoutParams> {
@@ -1627,10 +1813,10 @@ class ImageAltTextKeyView(
         altText.visibility = if (hasUpLabel) View.VISIBLE else View.GONE
         altText1.visibility = if (hasDownLabel) View.VISIBLE else View.GONE
         if (hasUpLabel) {
-            applyCornerAltTextPosition(altText, atTop = true, atStart = atStart, hideSibling = false)
+            applyCornerAltTextPosition(altText, atTop = true, atLeft = atLeft, hideSibling = false)
         }
         if (hasDownLabel) {
-            applyCornerAltTextPosition(altText1, atTop = false, atStart = atStart, hideSibling = false)
+            applyCornerAltTextPosition(altText1, atTop = false, atLeft = atLeft, hideSibling = false)
         }
     }
 
@@ -1650,11 +1836,17 @@ class ImageAltTextKeyView(
         altText.gravity = Gravity.CENTER
     }
 
-    private fun resolveLayoutMode(keyHeight: Int): AltTextLayoutMode {
+    /**
+     * 副标签的几何布局：只看标签内容与键高，**不看**「显示按键副标签」这个开关。
+     *
+     * 手势方向必须基于这个结果：开关关掉时标签不画，但键上的上/下滑标签仍然存在，
+     * 方向不能跟着一起消失（见 [shouldTriggerAltBySwipe]）。
+     */
+    private fun resolveGestureLayoutMode(keyHeight: Int): AltTextLayoutMode {
         val pref = punctuationPositionForKey()
         if (def.directionalSwipeLabels) {
             // 方向性标签的位置只由标签方向决定（上标签在上、下标签在下），刻意不读
-            // 主题的「标点位置」——见 AltTextKeyView.resolveLayoutMode 的同一说明。
+            // 主题的「标点位置」——见 AltTextKeyView.resolveGestureLayoutMode 的同一说明。
             val hasUpLabel = !altText.text.isNullOrBlank()
             val hasDownLabel = !altText1.text.isNullOrBlank()
             if (!hasUpLabel && !hasDownLabel) return AltTextLayoutMode.Hidden
@@ -1662,16 +1854,16 @@ class ImageAltTextKeyView(
             // 主题里手动开启「副标签显示在侧边」后，位置只由该设置决定，不再看键高：
             // 上标签贴所选侧的顶角、下标签贴同侧的底角。
             if (ThemeManager.prefs.altLabelOnSide.getValue()) {
-                val atStart = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
+                val atLeft = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
                 return when {
                     hasUpLabel && hasDownLabel ->
-                        if (atStart) AltTextLayoutMode.DirectionalCornersLeft
+                        if (atLeft) AltTextLayoutMode.DirectionalCornersLeft
                         else AltTextLayoutMode.DirectionalCorners
                     hasUpLabel ->
-                        if (atStart) AltTextLayoutMode.DirectionalUpTopLeft
+                        if (atLeft) AltTextLayoutMode.DirectionalUpTopLeft
                         else AltTextLayoutMode.DirectionalUpTopRight
                     else ->
-                        if (atStart) AltTextLayoutMode.DirectionalDownBottomLeft
+                        if (atLeft) AltTextLayoutMode.DirectionalDownBottomLeft
                         else AltTextLayoutMode.DirectionalDownBottomRight
                 }
             }
@@ -1752,12 +1944,12 @@ class ImageAltTextKeyView(
         // 上滑标签贴所选侧的顶角、下滑标签贴同侧的底角。位置只由该设置决定，不再看键高，
         // 与方向性标签分支保持一致；滑动方向不变（顶部标签仍上滑、底部标签仍下滑）。
         if (ThemeManager.prefs.altLabelOnSide.getValue()) {
-            val atStart = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
+            val atLeft = ThemeManager.prefs.altLabelSide.getValue() == AltLabelSide.Left
             return when (preferred) {
                 AltTextLayoutMode.TopRight, AltTextLayoutMode.TopCenter ->
-                    if (atStart) AltTextLayoutMode.TopLeft else AltTextLayoutMode.TopRight
+                    if (atLeft) AltTextLayoutMode.TopLeft else AltTextLayoutMode.TopRight
                 AltTextLayoutMode.Bottom ->
-                    if (atStart) AltTextLayoutMode.BottomLeft else AltTextLayoutMode.BottomRight
+                    if (atLeft) AltTextLayoutMode.BottomLeft else AltTextLayoutMode.BottomRight
                 else -> AltTextLayoutMode.Hidden
             }
         }
@@ -1811,10 +2003,18 @@ class ImageAltTextKeyView(
         }
     }
 
+    /** 副标签的绘制布局：开关关掉时直接 Hidden，不占位、不重新测量，键面只剩图标或主字符。 */
+    private fun resolveLayoutMode(keyHeight: Int): AltTextLayoutMode =
+        if (ThemeManager.prefs.showKeyAltLabels.getValue()) resolveGestureLayoutMode(keyHeight)
+        else AltTextLayoutMode.Hidden
+
     private fun applyLayout(keyHeight: Int = appearanceView.height): Boolean {
-        val mode = resolveLayoutMode(keyHeight)
-        if (mode == lastLayoutMode) return false
+        val gestureMode = resolveGestureLayoutMode(keyHeight)
+        val mode = if (ThemeManager.prefs.showKeyAltLabels.getValue()) gestureMode
+        else AltTextLayoutMode.Hidden
+        if (mode == lastLayoutMode && gestureMode == lastGestureLayoutMode) return false
         lastLayoutMode = mode
+        lastGestureLayoutMode = gestureMode
         val keepDirectionalLabel = when (mode) {
             AltTextLayoutMode.DirectionalUpTopRight,
             AltTextLayoutMode.DirectionalUpTopLeft,
@@ -1844,7 +2044,7 @@ class ImageAltTextKeyView(
             AltTextLayoutMode.DirectionalTopBottom -> applyDirectionalTopBottomAltTextPosition()
             AltTextLayoutMode.DirectionalCorners -> applyDirectionalCornersAltTextPosition()
             AltTextLayoutMode.DirectionalCornersLeft ->
-                applyDirectionalCornersAltTextPosition(atStart = true)
+                applyDirectionalCornersAltTextPosition(atLeft = true)
             AltTextLayoutMode.Hidden -> applyNoAltTextPosition()
         }
         return true
@@ -1852,12 +2052,13 @@ class ImageAltTextKeyView(
 
     fun refreshAltTextLayout() {
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
     }
 
     override fun shouldTriggerAltBySwipe(totalY: Int, fallback: SwipeSymbolDirection): Boolean {
         if (totalY == 0) return false
-        return when (lastLayoutMode ?: resolveLayoutMode(appearanceView.height)) {
+        return when (lastGestureLayoutMode ?: resolveGestureLayoutMode(appearanceView.height)) {
             AltTextLayoutMode.Bottom,
             AltTextLayoutMode.BottomLeft,
             AltTextLayoutMode.BottomRight -> totalY > 0
@@ -1885,6 +2086,7 @@ class ImageAltTextKeyView(
     override fun onConfigurationChanged(newConfig: Configuration) {
         invalidateTextMetricsCache()
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
     }
 
@@ -1911,6 +2113,7 @@ class ImageAltTextKeyView(
         )
         reapplyIconThemeOverride()
         lastLayoutMode = null
+        lastGestureLayoutMode = null
         applyLayout()
     }
 }
@@ -1933,6 +2136,7 @@ class ImageKeyView(
     private var iconThemeTintWithTheme: Boolean? = null
     private val defaultSrc: Int = def.src
     private var asciiMode = false
+    override val themedIconSlot: String? get() = iconSlot
     val img = imageView { configure(theme, def.src, def.variant) }.apply {
         imageTintList = ColorStateList.valueOf(
             resolveTextColor(
@@ -2029,6 +2233,7 @@ class ImageTextKeyView(
 ) :
     TextKeyView(ctx, theme, def, horizontalGapScale) {
     private var iconThemeTintWithTheme: Boolean? = null
+    override val themedIconSlot: String? get() = iconSlot
     val img = imageView {
         configure(theme, def.src, def.variant)
         imageTintList = ColorStateList.valueOf(

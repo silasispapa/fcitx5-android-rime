@@ -523,6 +523,7 @@
     <!-- Auto-completed missing strings (de) -->
     <string name="_cannot_be_empty">%1$s darf nicht leer sein</string>
     <string name="back_to_keyboard">Zurück zur Tastatur</string>
+    <string name="exit_inline_suggestions">Autofill-Vorschläge schließen</string>
     <string name="backspace">Rücktaste</string>
     <string name="build_time">Build-Zeit</string>
     <string name="button_up_haptic_feedback">Vibration beim Loslassen</string>
@@ -781,4 +782,19 @@
     <string name="user_data_export_changed">Eine Datei wurde während der Sicherung weiterhin geändert. Externe Synchronisierung oder Bearbeitung pausieren und erneut versuchen.</string>
     <string name="user_data_exported">Sicherung gespeichert.</string>
     <string name="user_data_export_cleanup_failed">Die Sicherung konnte nicht geschrieben und die unvollständige Datei nicht entfernt werden. Die Datei manuell löschen und erneut versuchen.</string>
+    <string name="alt_label_on_side">Wisch-Labels seitlich anzeigen</string>
+    <string name="alt_label_side">Seite für Wisch-Labels</string>
+    <string name="alt_label_side_left">Links</string>
+    <string name="alt_label_side_right">Rechts</string>
+    <string name="edit_button_icon_ascii">Symbol für ASCII-Modus</string>
+    <string name="text_keyboard_layout_space_label">Beschriftung der Leertaste</string>
+    <string name="text_keyboard_layout_space_label_hint">Leer lassen, um automatisch den aktuellen Schema-Namen (oder den Chinesisch-/ASCII-Status) anzuzeigen.</string>
+    <string name="show_key_alt_labels">Tasten-Zusatzbeschriftungen anzeigen</string>
+    <string name="show_key_alt_labels_summary">Der kleine Hinweistext auf Tasten: Satzzeichen auf Buchstabentasten, Wischhinweise auf Funktionstasten.</string>
+    <string name="theme_kit_title">Komplettes Themenset anwenden?</string>
+    <string name="theme_kit_message">Dieses Thema hat auch ein passendes Tastaturlayout, ein Symbolthema, eine Schrift für Tasten-Zusatzbeschriftungen und einen Tastenkappenstil. Zusammen mit \"%1$s\" anwenden?</string>
+    <string name="theme_kit_apply_all">Alles anwenden</string>
+    <string name="theme_kit_theme_only">Nur Farben</string>
+    <string name="icon_theme_letter_keys">Buchstabentasten</string>
+    <string name="icon_theme_numpad_keys">Zifferntasten</string>
 </resources>
