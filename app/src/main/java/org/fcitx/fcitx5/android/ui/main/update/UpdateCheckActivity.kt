@@ -75,6 +75,8 @@ class UpdateCheckActivity : SettingsUiActivity() {
     private var releaseRefreshJob: Job? = null
     private var releaseRefreshGeneration = 0
     private lateinit var assetsView: RecyclerView
+    private lateinit var showAllAssetsButton: TextView
+    private var showAllAssets = false
     private lateinit var adapter: UpdateAssetAdapter
     private lateinit var downloadManager: DownloadManager
 
@@ -155,6 +157,12 @@ class UpdateCheckActivity : SettingsUiActivity() {
         }
         checkProgress = findViewById(R.id.updateCheckProgress)
         assetsView = findViewById(R.id.assetsRecycler)
+        showAllAssetsButton = findViewById<TextView>(R.id.updateShowAllAssets).apply {
+            setOnClickListener {
+                showAllAssets = !showAllAssets
+                submitAssets()
+            }
+        }
         downloadManager = getSystemService(DownloadManager::class.java)
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
@@ -275,7 +283,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                 }
                 downloadStates.clear()
                 list.forEach { downloadStates[it.asset.browserDownloadUrl] = it }
-                adapter.submitList(list)
+                submitAssets()
                 adapter.setReleaseNotes(notes)
                 observeHostsDownloads()
             } catch (e: CancellationException) { throw e }
@@ -562,7 +570,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                 if (downloadStates[key]?.asset != state.asset) return@launch
                 if (existing != null) {
                     downloadStates[key] = existing
-                    adapter.submitList(downloadStates.values.toList())
+                    submitAssets()
                 } else enqueueDownload(state)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
@@ -614,7 +622,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                 error = null
             )
             downloadStates[state.asset.browserDownloadUrl] = updated
-            adapter.submitList(downloadStates.values.toList())
+            submitAssets()
             startPolling()
         } catch (e: IllegalArgumentException) {
             showUrlDialog(getString(R.string.update_invalid_download_url), downloadUrl)
@@ -630,6 +638,20 @@ class UpdateCheckActivity : SettingsUiActivity() {
     private fun hasLegacyWritePermission(): Boolean {
         return checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
             PackageManager.PERMISSION_GRANTED
+    }
+
+    /** 默认只列出与本机 ABI 匹配的 APK；「显示全部」切换完整列表。 */
+    private fun submitAssets() {
+        val all = downloadStates.values.toList()
+        val matched = UpdateAbiFilter.filter(all, Build.SUPPORTED_ABIS.toList()) { it.asset.name }
+        val hidden = all.size - matched.size
+        showAllAssetsButton.visibility = if (hidden > 0) View.VISIBLE else View.GONE
+        showAllAssetsButton.text = if (showAllAssets) {
+            getString(R.string.update_show_matching_assets)
+        } else {
+            getString(R.string.update_show_all_assets, hidden)
+        }
+        adapter.submitList(if (showAllAssets) all else matched)
     }
 
     private fun requiresSharedReadPermission(): Boolean {
@@ -652,7 +674,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
         cancellingDownloads.remove(key)
         downloadStates[key] = state.copy(status = AssetStatus.DOWNLOADING, progressPercent = 0,
             downloadedBytes = 0, speedBytesPerSec = 0, downloadId = null, workId = null, installUri = null, error = null)
-        adapter.submitList(downloadStates.values.toList())
+        submitAssets()
         // Enqueue belongs to the application; cancelling this awaiting UI job never cancels it.
         val pending = HostsDownloads.enqueue(applicationContext, state.asset, downloadUrl)
         lifecycleScope.launch {
@@ -666,7 +688,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                 val current = downloadStates[key] ?: return@launch
                 downloadStates[key] = current.copy(status = AssetStatus.FAILED, speedBytesPerSec = 0,
                     error = getString(R.string.update_asset_failed))
-                adapter.submitList(downloadStates.values.toList())
+                submitAssets()
             }
         }
     }
@@ -689,7 +711,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                         if (current.status == AssetStatus.FINISHED && current.installUri != null &&
                             info.state != WorkInfo.State.SUCCEEDED) return@collect
                         downloadStates[key] = HostsDownloadUiState.apply(current, info)
-                        adapter.submitList(downloadStates.values.toList())
+                        submitAssets()
                         if (info.state == WorkInfo.State.SUCCEEDED) validateFinishedDownloads()
                         if (info.state.isFinished) withContext(Dispatchers.IO) { HostsDownloads.cleanup(applicationContext, info.id) }
                     }
@@ -713,7 +735,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
             speedBytesPerSec = 0L,
             downloadId = null
         )
-        adapter.submitList(downloadStates.values.toList())
+        submitAssets()
     }
 
     private fun launchInstall(state: AssetUiState) {
@@ -833,7 +855,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                 }
             }
         }
-        adapter.submitList(downloadStates.values.toList())
+        submitAssets()
     }
 
     /**
@@ -862,7 +884,7 @@ class UpdateCheckActivity : SettingsUiActivity() {
                 }
             }
             if (changed) {
-                adapter.submitList(downloadStates.values.toList())
+                submitAssets()
             }
         }
     }

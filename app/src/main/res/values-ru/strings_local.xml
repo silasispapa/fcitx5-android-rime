@@ -113,6 +113,8 @@
     <string name="split_words">Разбить на слова</string>
     <string name="about_current_version_new_available">%1$s  New: %2$s</string>
     <string name="update_page_title">Check updates</string>
+    <string name="update_show_all_assets">Show all %1$d other APKs</string>
+    <string name="update_show_matching_assets">Show only the APK for this device</string>
     <string name="update_checking">Checking latest version…</string>
     <string name="update_latest_version_line">Latest version: %1$s %2$s</string>
     <string name="update_new_version_badge">(new version)</string>

@@ -116,6 +116,8 @@
     <string name="about_server_syncclipboard_summary">点击打开 SyncClipboard GitHub 项目</string>
     <string name="about_current_version_new_available">%1$s  新版本：%2$s</string>
     <string name="update_page_title">检查更新</string>
+    <string name="update_show_all_assets">显示其余 %1$d 个 APK</string>
+    <string name="update_show_matching_assets">只显示本机适用的 APK</string>
     <string name="update_checking">正在检查最新版本…</string>
     <string name="update_latest_version_line">最新版本：%1$s %2$s</string>
     <string name="update_new_version_badge">（有新版本）</string>

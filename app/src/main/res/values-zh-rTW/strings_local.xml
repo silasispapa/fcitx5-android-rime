@@ -107,6 +107,8 @@
     <string name="manual_capture_success">已讀取系統剪貼簿並加入同步佇列</string>
     <string name="about_current_version_new_available">%1$s  新版本：%2$s</string>
     <string name="update_page_title">檢查更新</string>
+    <string name="update_show_all_assets">顯示其餘 %1$d 個 APK</string>
+    <string name="update_show_matching_assets">只顯示本機適用的 APK</string>
     <string name="update_checking">正在檢查最新版本…</string>
     <string name="update_latest_version_line">最新版本：%1$s %2$s</string>
     <string name="update_new_version_badge">（有新版本）</string>

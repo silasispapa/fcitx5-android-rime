@@ -54,6 +54,15 @@
             app:icon="@drawable/ic_settings_retry" />
     </LinearLayout>
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/updateShowAllAssets"
+        style="@style/Widget.FcitxSettings.Button.Text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:layout_marginHorizontal="12dp"
+        android:visibility="gone" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/assetsRecycler"
         android:layout_width="match_parent"
