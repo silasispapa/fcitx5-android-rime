@@ -72,6 +72,7 @@ import org.fcitx.fcitx5.android.input.candidates.expanded.window.FlexboxExpanded
 import org.fcitx.fcitx5.android.input.candidates.expanded.window.GridExpandedCandidateWindow
 import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesMode
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateComponent
+import org.fcitx.fcitx5.android.input.clipboard.ClipboardLinkExtractor
 import org.fcitx.fcitx5.android.input.clipboard.ClipboardWindow
 import org.fcitx.fcitx5.android.input.dependency.UniqueViewComponent
 import org.fcitx.fcitx5.android.input.dependency.context
@@ -193,6 +194,9 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
                     isClipboardFresh = false
                 } else {
                     val isImage = it.type.startsWith("image/")
+                    val link = if (isImage || it.sensitive) null else ClipboardLinkExtractor.extract(it.text)
+                    idleUi.clipboardUi.linkView.visibility = if (link == null) View.GONE else View.VISIBLE
+                    idleUi.clipboardUi.linkText.text = link
                     if (isImage) {
                         idleUi.clipboardUi.text.visibility = View.GONE
                         idleUi.clipboardUi.preview.visibility = View.VISIBLE
@@ -644,6 +648,15 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
                 }
                 true
             }
+        }
+        ui.clipboardUi.linkView.setOnClickListener {
+            ui.clipboardUi.linkText.text?.toString()?.takeIf { it.isNotEmpty() }?.let {
+                service.commitText(it)
+            }
+            clipboardTimeoutJob?.cancel()
+            clipboardTimeoutJob = null
+            isClipboardFresh = false
+            evalIdleUiState()
         }
     }
 
