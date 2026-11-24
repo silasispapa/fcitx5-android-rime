@@ -36,6 +36,8 @@ import org.fcitx.fcitx5.android.data.theme.ThemeManager
 import org.fcitx.fcitx5.android.input.AutoScaleTextView
 import org.fcitx.fcitx5.android.input.config.ButtonIconFile
 import org.fcitx.fcitx5.android.input.font.FontProviders
+import org.fcitx.fcitx5.android.input.keyboard.CustomGestureView.GestureType
+import org.fcitx.fcitx5.android.input.keyboard.CustomGestureView.OnGestureListener
 import org.fcitx.fcitx5.android.input.keyboard.KeyAction
 import org.fcitx.fcitx5.android.input.keyboard.KeyAction.SymAction
 import org.fcitx.fcitx5.android.input.keyboard.KeyActionListener
@@ -219,9 +221,17 @@ class SymbolPanelUi(
                 FontProviders.getFontSize("key_main_font", textSize)
             )
             keyView.mainText.setFontTypeFace("key_main_font")
-            // 面板靠滚动翻页，不用滑动切页手势
-            keyView.swipeEnabled = false
-            keyView.onGestureListener = null
+            // 面板靠滚动翻页，不用滑动切页手势；但长按弹出的浮层要靠 Move/Up 驱动，
+            // 接线方式与标准键盘的 KeyDef.Popup.Keyboard 分支一致。
+            keyView.swipeEnabled = true
+            keyView.onGestureListener = OnGestureListener { view, event ->
+                view as KeyView
+                when (event.type) {
+                    GestureType.Move -> onPopupChangeFocus(view.id, event.x, event.y)
+                    GestureType.Up -> onPopupTrigger(view.id)
+                    else -> false
+                }
+            }
             keyView.setOnClickListener { commit(raw) }
             keyView.setOnLongClickListener {
                 val popup = policy.popup(raw)
@@ -230,11 +240,20 @@ class SymbolPanelUi(
                 } else {
                     // 弹出键盘需要按键在屏幕上的实际位置
                     keyView.updateBounds()
+                    // 网格装在 RecyclerView 里：不夺走父容器拦截，长按后上下移动会被当成
+                    // 滚动并给按键发 ACTION_CANCEL，浮层刚出现就被取消
+                    keyView.requestDisallowInterceptTouchEvent(true)
+                    // 同一时刻只保留一个浮层；另一根手指按住的那个不在此列，否则多指
+                    // 长按时会撤掉前一根手指的待选浮层，松手什么都不上屏
+                    popupActionListener.onPopupAction(
+                        PopupAction.DismissAllAction(exceptViewId = heldPopupKeyId(viewId = keyView.id))
+                    )
                     popupActionListener.onPopupAction(
                         PopupAction.ShowKeyboardAction(keyView.id, popup, keyView.bounds)
                     )
-                    popupKey = keyView
-                    true
+                    // 必须返回 false：返回 true 会让 CustomGestureView 进入长按分支，
+                    // 之后的 Move/Up 不再派发给 onGestureListener，浮层就无法滑动和收起
+                    false
                 }
             }
         }
@@ -293,9 +312,6 @@ class SymbolPanelUi(
             label.setOnClickListener { selectGroup(position) }
         }
     }
-
-    /** 正在显示长按弹窗（肤色等）的格子；弹窗期间本次触摸由 [GridTouchListener] 驱动。 */
-    private var popupKey: TextKeyView? = null
 
     private lateinit var sidebarRecycler: RecyclerView
     private lateinit var gridRecycler: RecyclerView
@@ -431,14 +447,11 @@ class SymbolPanelUi(
     }
 
     /**
-     * 网格触摸：长按弹窗与左右滑动切换分组。
+     * 网格触摸：左右滑动切换分组。
      *
-     * - 弹窗出现后接管本次触摸：滑动移动焦点，抬手上屏所选项并关闭弹窗，与主键盘一致。
-     *   格子关掉了滑动手势（否则抢走纵向滚动），所以这一步只能在网格层做。
-     * - 左滑下一组，右滑上一组，两端不循环。横向位移明显大于纵向才拦截，格子收到
-     *   CANCEL 不会误上屏；纵向滚动已开始或已到长按时间时本次触摸不参与。
-     *
-     * 被拦截的那个事件不会再进 [onTouchEvent]，所以弹窗事件在两处都要处理。
+     * 左滑下一组，右滑上一组，两端不循环。横向位移明显大于纵向才拦截，格子收到
+     * CANCEL 不会误上屏；纵向滚动已开始或已到长按时间时本次触摸不参与。
+     * 长按弹窗由格子自身的手势驱动，并禁止父容器拦截。
      */
     private inner class GridTouchListener : RecyclerView.SimpleOnItemTouchListener() {
         private val threshold = ctx.dp(SWIPE_THRESHOLD_DP)
@@ -448,10 +461,6 @@ class SymbolPanelUi(
         private var tracking = false
 
         override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
-            popupKey?.let {
-                if (e.actionMasked != MotionEvent.ACTION_DOWN) return drivePopup(it, e)
-                dismissPopup(it)
-            }
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.x
@@ -476,37 +485,12 @@ class SymbolPanelUi(
         }
 
         override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
-            popupKey?.let { drivePopup(it, e); return }
             if (e.actionMasked != MotionEvent.ACTION_UP) return
             tracking = false
             val dx = e.x - downX
             if (abs(dx) < threshold) return
             val target = selectedIndex + if (dx < 0) 1 else -1
             if (target in groups.indices) selectGroup(target)
-        }
-
-        /** 坐标换算到格子内，与主键盘传给弹窗的一致。 */
-        private fun drivePopup(key: TextKeyView, e: MotionEvent): Boolean {
-            when (e.actionMasked) {
-                MotionEvent.ACTION_MOVE -> popupActionListener.onPopupAction(
-                    PopupAction.ChangeFocusAction(key.id, e.x - key.left, e.y - key.top)
-                )
-                MotionEvent.ACTION_UP -> {
-                    val trigger = PopupAction.TriggerAction(key.id)
-                    popupActionListener.onPopupAction(trigger)
-                    trigger.outAction?.let {
-                        keyActionListener.onKeyAction(it, KeyActionListener.Source.Popup)
-                    }
-                    dismissPopup(key)
-                }
-                MotionEvent.ACTION_CANCEL -> dismissPopup(key)
-            }
-            return true
-        }
-
-        private fun dismissPopup(key: TextKeyView) {
-            popupKey = null
-            popupActionListener.onPopupAction(PopupAction.DismissAction(key.id))
         }
     }
 
@@ -757,11 +741,6 @@ class SymbolPanelUi(
         }
     }
 
-    /** 只停下惯性滚动，不改变位置（长按弹窗要盖在原来那格上）。 */
-    fun stopScroll() {
-        gridRecycler.stopScroll()
-    }
-
     fun scrollToTop() {
         gridRecycler.scrollToPosition(0)
         sidebarRecycler.scrollToPosition(selectedIndex.coerceAtLeast(0))
@@ -780,6 +759,39 @@ class SymbolPanelUi(
             if (code in DigitRange || code in FullWidthDigitRange) return
         }
         recentlyUsed.insert(text)
+    }
+
+    private fun onPopupChangeFocus(viewId: Int, x: Float, y: Float): Boolean {
+        val changeFocusAction = PopupAction.ChangeFocusAction(viewId, x, y)
+        popupActionListener.onPopupAction(changeFocusAction)
+        return changeFocusAction.outResult
+    }
+
+    private fun onPopupTrigger(viewId: Int): Boolean {
+        val triggerAction = PopupAction.TriggerAction(viewId)
+        popupActionListener.onPopupAction(triggerAction)
+        val action = triggerAction.outAction
+        if (action != null) {
+            keyActionListener.onKeyAction(action, KeyActionListener.Source.Popup)
+            when (action) {
+                is KeyAction.CommitAction -> insertRecent(action.text)
+                is KeyAction.FcitxKeyAction -> insertRecent(action.act)
+                else -> {}
+            }
+        }
+        // 浮层可能没有可触发的键（初始焦点落在补位格上），松手也必须收起，
+        // 不能像修复前那样一直盖在面板上
+        popupActionListener.onPopupAction(PopupAction.DismissAction(viewId))
+        return action != null
+    }
+
+    /** 另一根手指正按住的网格按键 id；多指长按时用来保留那根手指的浮层。 */
+    private fun heldPopupKeyId(viewId: Int): Int? {
+        for (i in 0 until gridRecycler.childCount) {
+            val child = gridRecycler.getChildAt(i)
+            if (child is KeyView && child.id != viewId && child.isPressed) return child.id
+        }
+        return null
     }
 
     /**

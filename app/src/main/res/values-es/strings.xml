@@ -299,7 +299,7 @@
     <string name="text_keyboard_layout_editing_submode">Editando diseño para el submodo "%1$s"</string>
     <string name="text_keyboard_layout_editing_default">Editando diseño predeterminado para "%1$s"</string>
     <string name="font_size">Tamaño de fuente</string>
-    <string name="font_size_value">%1$d sp</string>
+    <string name="font_size_value">%1$s sp</string>
     <string name="font_size_editor_title">%1$s - Tamaño de fuente</string>
     <string name="font_size_editor_hint">Arrastra para ajustar el tamaño de fuente (%1$d–%2$d sp)</string>
     <string name="candidates_orientation">Orientación de la lista de candidatos</string>
@@ -309,10 +309,12 @@
     <string name="vertical_reversed">Vertical (invertido)</string>
     <string name="always">Siempre</string>
     <string name="candidates_position">Posición de la ventana de candidatos</string>
+    <string name="physical_keyboard_candidates_position">Posición de la ventana de candidatos con teclado físico</string>
     <string name="top_left">Arriba izquierda</string>
     <string name="top_right">Arriba derecha</string>
     <string name="bottom_left">Abajo izquierda</string>
     <string name="bottom_right">Abajo derecha</string>
+    <string name="follow_cursor">Seguir el cursor</string>
     <string name="candidates_font_size">Tamaño de fuente de candidatos</string>
     <string name="candidates_padding">Relleno de candidatos</string>
     <string name="candidates_window_min_width">Ancho mínimo de ventana de candidatos</string>
@@ -453,7 +455,7 @@
     <string name="monet_editor_select_color_resource">Seleccionar recurso de color</string>
     <string name="monet_editor_select">Seleccionar</string>
     <string name="monet_editor_color_mapping_title">Mapeo de colores</string>
-    <string name="monet_editor_description">Asocie cada color del tema a un recurso de color dinámico de Material You. Los cambios se guardarán y aplicarán automáticamente.</string>
+    <string name="monet_editor_description">Asocie cada color del tema a un recurso de color dinámico de Material You. Toque ✓ para guardar y aplicar; si sale sin hacerlo, los cambios se descartan.</string>
     <string name="edit_monet_theme">Editar tema Monet</string>
 
     <string name="text_keyboard_layout_add_submode">Agregar diseño de submodo</string>
@@ -686,6 +688,8 @@
     <string name="text_keyboard_layout_qr_import_success_profile">Diseno QR importado al perfil "%1$s". Guarde para conservar cambios.</string>
     <string name="theme_message_follow_system_day_night_mode_enabled">No se puede cambiar el tema manualmente mientras este activado "Seguir tema dia/noche del sistema".</string>
     <string name="toolbar_num_row_on_password">Mostrar fila numerica en la barra de herramientas al ingresar contrasena</string>
+    <string name="allow_ime_in_password_fields">Permitir el método de entrada en campos de contraseña</string>
+    <string name="allow_ime_in_password_fields_summary">Usar Rime también en los campos de contraseña. Al escribir en un campo de contraseña, el aprendizaje de palabras, las estadísticas de entrada y la entrada por voz permanecen desactivados.</string>
     <string name="unimplemented_type">⛔ Tipo no implementado</string>
     <string name="update_table">Actualizar tabla</string>
     <string name="update_storage_permission_denied">Permiso de almacenamiento denegado</string>

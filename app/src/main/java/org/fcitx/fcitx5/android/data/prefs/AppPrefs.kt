@@ -17,7 +17,7 @@ import org.fcitx.fcitx5.android.input.candidates.CandidateIndexBadgePosition
 import org.fcitx.fcitx5.android.input.candidates.expanded.ExpandedCandidateStyle
 import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesMode
 import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesOrientation
-import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesVirtualKeyboardPosition
+import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesPosition
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateMode
 import org.fcitx.fcitx5.android.input.keyboard.KeyboardHeightPercentBase
 import org.fcitx.fcitx5.android.input.keyboard.SpaceKeyLabelMode
@@ -204,6 +204,14 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         val inlineSuggestions = switch(R.string.inline_suggestions, "inline_suggestions", true)
         val toolbarNumRowOnPassword =
             switch(R.string.toolbar_num_row_on_password, "toolbar_num_row_on_password", true)
+        // 默认关闭：密码框只把按键直录给编辑器，不进 Rime，因而无法切到中文等方案。
+        // 开启后密码框的按键交给 Rime，但该输入框仍然不学习、不计统计、不开放语音输入。
+        val allowImeInPasswordFields = switch(
+            R.string.allow_ime_in_password_fields,
+            "allow_ime_in_password_fields",
+            false,
+            R.string.allow_ime_in_password_fields_summary
+        )
         val popupOnKeyPress = switch(R.string.popup_on_key_press, "popup_on_key_press", true)
         val keepLettersUppercase = switch(
             R.string.keep_keyboard_letters_uppercase,
@@ -259,8 +267,12 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
             "default"
         ).apply { register() }
         /**
-         * 数字输入框使用的自定义布局键（可为任意布局名或 ime:submode，如 rime:wanxiang）。
-         * 留空表示使用内置数字键盘。仅存于应用设置，与布局文件解耦。
+         * 数字输入框使用的键盘布局。
+         *
+         * 留空表示自动：优先当前布局文件里自带的数字层（__layer__:数字 / 数字 / 123 / ?123
+         * 这类层子布局），没有才回落到内置数字键盘；换成套主题后自动跟随。
+         * [org.fcitx.fcitx5.android.input.keyboard.NumericLayoutResolver.BUILTIN] 表示强制内置键盘，
+         * 其他值按布局键（rime:__layer__:数字）或裸层名（数字）解析。
          */
         val numericLayoutOverride = ManagedPreference.PString(
             sharedPreferences,
@@ -544,9 +556,33 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         val virtualKeyboardPosition = enumList(
             R.string.candidates_position,
             "virtual_keyboard_candidates_position",
-            FloatingCandidatesVirtualKeyboardPosition.TopLeft
+            FloatingCandidatesPosition.TopLeft,
+            entryValues = FloatingCandidatesPosition.entries.filterNot { it == FloatingCandidatesPosition.Default }
         ) {
             mode.getValue() == FloatingCandidatesMode.Always
+        }
+
+        val physicalKeyboardPosition = enumList(
+            R.string.physical_keyboard_candidates_position,
+            "physical_keyboard_candidates_position",
+            FloatingCandidatesPosition.Default,
+            entryValues = listOf(FloatingCandidatesPosition.Default) +
+                FloatingCandidatesPosition.entries.filterNot { it == FloatingCandidatesPosition.Default }
+        ) {
+            mode.getValue() == FloatingCandidatesMode.InputDevice &&
+                !physicalKeyboardHorizontalCandidateBar.getValue()
+        }
+
+        internal fun windowPosition(
+            mode: FloatingCandidatesMode,
+            virtualKeyboard: Boolean
+        ): FloatingCandidatesPosition? = when (mode) {
+            FloatingCandidatesMode.Always -> virtualKeyboardPosition.getValue()
+            FloatingCandidatesMode.InputDevice ->
+                if (!virtualKeyboard && !physicalKeyboardHorizontalCandidateBar.getValue()) {
+                    physicalKeyboardPosition.getValue().takeUnless { it == FloatingCandidatesPosition.Default }
+                } else null
+            else -> null
         }
 
         val windowMinWidth = int(

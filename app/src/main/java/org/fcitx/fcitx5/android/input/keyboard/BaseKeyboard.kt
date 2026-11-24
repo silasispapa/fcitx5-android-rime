@@ -2635,6 +2635,7 @@ abstract class BaseKeyboard(
         view.setOnClickListener(null)
         view.setOnLongClickListener(null)
         view.repeatEnabled = false
+        view.letterTapHandoverEnabled = false
         view.onRepeatListener = null
         view.onRepeatStartListener = null
         view.onRepeatMoveListener = null
@@ -2660,8 +2661,10 @@ abstract class BaseKeyboard(
         behaviors.forEach {
             when (it) {
                 is KeyDef.Behavior.Press -> {
+                    val action = it.action
+                    view.letterTapHandoverEnabled = !vivoKeypressWorkaround && action.isSingleVirtualLetterTap()
                     view.setOnClickListener { _ ->
-                        onAction(it.action)
+                        onAction(action)
                     }
                 }
                 is KeyDef.Behavior.LongPress -> {

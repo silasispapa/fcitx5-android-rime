@@ -209,6 +209,8 @@
     <string name="notification_permission_message">通知の許可がない場合、時間のかかる操作が行われたときに通知することができません。</string>
     <string name="notification_permission_title">通知の権限がありません</string>
     <string name="toolbar_num_row_on_password">パスワード入力時に数字をツールバーに横並びで表示する</string>
+    <string name="allow_ime_in_password_fields">パスワード欄で入力メソッドを許可</string>
+    <string name="allow_ime_in_password_fields_summary">パスワード欄でも Rime を使用します。パスワード欄への入力中は、単語学習、入力統計、音声入力が無効のままです。</string>
     <string name="space_long_press_behavior">スペースキー長押し時の動作</string>
     <string name="space_behavior_none">なし</string>
     <string name="space_behavior_enumerate">有効な Rime スキーマを順に切り替える</string>
@@ -315,7 +317,7 @@
     <string name="popup_editor_candidate_input_hint">候補値を入力</string>
     <string name="edit_text_keyboard_layout">キーボード定義を変更</string>
     <string name="font_size">フォントサイズ</string>
-    <string name="font_size_value">%1$d sp</string>
+    <string name="font_size_value">%1$s sp</string>
     <string name="font_size_editor_title">%1$s - フォントサイズ</string>
     <string name="font_size_editor_hint">ドラッグしてフォントサイズを調整 (%1$d–%2$d sp)</string>
     <string name="text_keyboard_layout_preview">プレビュー</string>
@@ -465,10 +467,12 @@
     <string name="vertical_reversed">縦（逆順）</string>
     <string name="always">常に</string>
     <string name="candidates_position">候補ウィンドウの位置</string>
+    <string name="physical_keyboard_candidates_position">物理キーボードの候補ウィンドウ位置</string>
     <string name="top_left">左上</string>
     <string name="top_right">右上</string>
     <string name="bottom_left">左下</string>
     <string name="bottom_right">右下</string>
+    <string name="follow_cursor">カーソルに追従</string>
     <string name="candidates_font_size">候補のフォントサイズ</string>
     <string name="candidates_padding">候補のパディング</string>
     <string name="candidate_highlight_radius">候補のハイライト角半径</string>
@@ -600,7 +604,7 @@
     <string name="monet_editor_select_color_resource">カラーリソースを選択</string>
     <string name="monet_editor_select">選択</string>
     <string name="monet_editor_color_mapping_title">カラーマッピング</string>
-    <string name="monet_editor_description">各テーマカラーを Material You ダイナミックカラーリソースにマッピングします。変更は自動的に保存され適用されます。</string>
+    <string name="monet_editor_description">各テーマカラーを Material You ダイナミックカラーリソースにマッピングします。✓ をタップすると保存して適用します。そのまま戻ると変更は保存されません。</string>
     <string name="edit_monet_theme">Monet テーマを編集</string>
 
     <string name="text_keyboard_layout_add_submode">サブモードレイアウトを追加</string>

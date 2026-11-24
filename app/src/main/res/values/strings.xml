@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name_release">Fcitx5.fx.rime</string>
     <string name="app_name_debug">Fcitx5.fx.rime (Debug)</string>
     <string name="save">Save</string>
@@ -281,7 +281,7 @@
     <string name="monet_editor_select_color_resource">Select Color Resource</string>
     <string name="monet_editor_select">Select</string>
     <string name="monet_editor_color_mapping_title">Color Mapping</string>
-    <string name="monet_editor_description">Map each theme color to a Material You dynamic color resource. Changes will be saved and applied automatically.</string>
+    <string name="monet_editor_description">Map each theme color to a Material You dynamic color resource. Tap ✓ to save and apply; leaving without it discards the changes.</string>
     <string name="edit_monet_theme">Edit Monet Theme</string>
     <string name="skip">Skip</string>
     <string name="none">None</string>
@@ -359,6 +359,7 @@
     <string name="system_default">System default</string>
     <string name="editor_info_inspector">EditorInfo Inspector</string>
     <string name="default_">Default</string>
+    <string name="layout_editor_layer_submode" tools:ignore="MissingTranslation">Layer: %1$s</string>
     <string name="saving">Saving</string>
     <string name="delete_all_pinned_items">Delete all pinned items?</string>
     <string name="vivo_keypress_workaround">vivo Origin OS keypress workaround</string>
@@ -380,6 +381,8 @@
     <string name="notification_permission_message">Without the permission to post notifications, we are not able to notify you when some time-consuming operations are done.</string>
     <string name="notification_permission_title">No Notification Permission</string>
     <string name="toolbar_num_row_on_password">Show number row on toolbar when inputting password</string>
+    <string name="allow_ime_in_password_fields">Allow input method in password fields</string>
+    <string name="allow_ime_in_password_fields_summary">Hand password fields to Rime as well. While typing in a password field, user word learning, input statistics and voice input stay disabled.</string>
     <string name="space_long_press_behavior">Space key long press behavior</string>
     <string name="space_behavior_none">None</string>
     <string name="space_behavior_repeat">Repeat space (hold to type spaces)</string>
@@ -479,7 +482,7 @@
     <string name="fontset_entry_preedit">Preedit Font</string>
     <string name="fontset_entry_comment">Comment Font</string>
     <string name="font_size">Font Size</string>
-    <string name="font_size_value">%1$d sp</string>
+    <string name="font_size_value">%1$s sp</string>
     <string name="font_size_editor_title">%1$s - Font Size</string>
     <string name="font_size_editor_hint">Drag to adjust font size (%1$d–%2$d sp)</string>
     <string name="fontset_save_failed_io_error">Failed to save fontset: I/O error occurred</string>
@@ -559,10 +562,12 @@
     <string name="vertical_reversed">Vertical (reversed)</string>
     <string name="always">Always</string>
     <string name="candidates_position">Candidates window position</string>
+    <string name="physical_keyboard_candidates_position">Physical keyboard candidate window position</string>
     <string name="top_left">Top Left</string>
     <string name="top_right">Top Right</string>
     <string name="bottom_left">Bottom Left</string>
     <string name="bottom_right">Bottom Right</string>
+    <string name="follow_cursor">Follow cursor</string>
     <string name="candidates_font_size">Candidate word font size</string>
     <string name="candidates_padding">Candidate word padding</string>
     <string name="candidate_highlight_radius">Candidate highlight radius</string>
@@ -752,6 +757,8 @@
     <string name="numeric_layout_override_title">Numeric keyboard layout</string>
     <string name="numeric_layout_override_builtin">Built-in number keypad</string>
     <string name="numeric_layout_override_unavailable">%1$s (unavailable in current profile)</string>
+    <string name="numeric_layout_override_auto" tools:ignore="MissingTranslation">Automatic (follow keyboard layout)</string>
+    <string name="numeric_layout_override_auto_summary" tools:ignore="MissingTranslation">Automatic: %1$s</string>
     <string name="text_keyboard_layout_copy_from">Copy from existing layout</string>
     <string name="text_keyboard_layout_name_empty">Layout name cannot be empty</string>
     <string name="text_keyboard_layout_delete_key_confirm">Delete this key?</string>

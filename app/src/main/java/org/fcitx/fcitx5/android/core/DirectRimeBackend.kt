@@ -18,6 +18,7 @@ import org.fcitx.fcitx5.android.core.engine.RimeEngineStore
 import org.fcitx.fcitx5.android.data.WanxiangAdvancedFiles
 import org.fcitx.fcitx5.android.data.RimeProfileImportTransaction
 import org.fcitx.fcitx5.android.data.RimeProfileUpdateInstaller
+import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.Executors
@@ -28,8 +29,12 @@ class DirectRimeBackend(context: Context) : InputEngine {
     private val context = FcitxApplication.getInstance().directBootAwareContext
     private val directBootMode = FcitxApplication.getInstance().isDirectBootMode
     private val owner = Executors.newSingleThreadExecutor { Thread(it, "rime-main") }.asCoroutineDispatcher()
+    // Ready is published while the lifecycle lock is held. Resume waiting keys
+    // through the owner queue, after the current callback publishes ReadyEvent.
+    override val interactiveDispatcher: CoroutineDispatcher get() = owner
     private val interactivePriority = InteractiveThreadPriority()
     private val engineScope = CoroutineScope(SupervisorJob() + owner)
+    private val assetPrewarmer = DirectRimeAssetPrewarmer(this.context, engineScope)
     private val registry = FcitxLifecycleRegistry()
     override val lifecycle: FcitxLifecycle get() = registry
     override val isReady get() = registry.currentState == FcitxLifecycle.State.READY && started
@@ -39,8 +44,12 @@ class DirectRimeBackend(context: Context) : InputEngine {
     private data class Binding(val generation: Long, val program: String, val flags: CapabilityFlags, val needsRime: Boolean)
     @Volatile private var binding: Binding? = null
     override val inputSession get() = epoch.get()
-    override fun invalidateInputSession(): Long = synchronized(bindingLock) {
-        epoch.incrementAndGet().also { binding = null; keyGate.invalidate(it) }
+    override fun invalidateInputSession(): Long {
+        val generation = synchronized(bindingLock) {
+            epoch.incrementAndGet().also { binding = null; keyGate.invalidate(it) }
+        }
+        assetPrewarmer.invalidate()
+        return generation
     }
     override fun prepareInputSession(generation: Long, program: String, flags: CapabilityFlags, needsRime: Boolean) {
         synchronized(bindingLock) {
@@ -60,8 +69,17 @@ class DirectRimeBackend(context: Context) : InputEngine {
         keyGate.prepare(generation, true)
         true
     }
-    override fun captureInputKey() = keyGate.capture { reason ->
-        android.util.Log.w("RimeInputQueue", "key_rejected generation=$inputSession reason=$reason")
+    override fun setKeyboardWindowVisible(visible: Boolean) {
+        if (!directBootMode && assetPrewarmer.setVisible(visible)) engineScope.launch { requestAssetPrewarm() }
+    }
+    override fun onKeyboardTouchStarted() {
+        if (!directBootMode) assetPrewarmer.inputStarted()
+    }
+    override fun captureInputKey(): InputKeyGate.Ticket? {
+        assetPrewarmer.inputStarted()
+        return keyGate.capture { reason ->
+            android.util.Log.w("RimeInputQueue", "key_rejected generation=$inputSession reason=$reason")
+        }
     }
     override fun canDeliverInputKey(ticket: InputKeyGate.Ticket): Boolean {
         val deliver = keyGate.canDeliver(ticket)
@@ -126,6 +144,7 @@ class DirectRimeBackend(context: Context) : InputEngine {
             override val inputSession get() = this@DirectRimeBackend.inputSession
             override fun enterMaintenance(): Pair<Long, Binding?> {
                 maintenance = true
+                assetPrewarmer.invalidate()
                 keyGate.block()
                 return synchronized(bindingLock) {
                     val previous = binding
@@ -265,8 +284,19 @@ class DirectRimeBackend(context: Context) : InputEngine {
     private fun refreshSchemas() {
         schemas = Native.schemaEntries().toList().chunked(2).map { it[0] to it[1] }
     }
+    /**
+     * Password fields are a direct-input editor unless the user explicitly allows the input
+     * method there (see [allowImeInPasswordFields]); learning, statistics and asset prewarm
+     * stay excluded by [CapabilityFlag.PasswordOrSensitive] either way.
+     */
+    private fun allowImeInPasswordFields(): Boolean =
+        AppPrefs.isInitialized() && AppPrefs.getInstance().keyboard.allowImeInPasswordFields.getValue()
+
+    private fun passwordBlocksIme(): Boolean =
+        flags.flags and CapabilityFlag.Password.flag != 0UL && !allowImeInPasswordFields()
+
     private fun forwardsKeysDirectly(): Boolean = directBootMode ||
-        flags.flags and (CapabilityFlag.Password.flag or CapabilityFlag.Disable.flag) != 0UL
+        flags.flags and CapabilityFlag.Disable.flag != 0UL || passwordBlocksIme()
 
     private fun bindingUsable(value: Snapshot): Boolean = value.ready ||
         // No Chinese schema is expected before first unlock. Direct input still needs the
@@ -326,6 +356,7 @@ class DirectRimeBackend(context: Context) : InputEngine {
         begin(generation)
     }
     private fun clearBinding(generation: Long) {
+        assetPrewarmer.invalidate()
         snapshot?.let { if (started) Native.end(it.generation) }
         snapshot = null
         appliedNoLearning = null
@@ -404,6 +435,21 @@ class DirectRimeBackend(context: Context) : InputEngine {
             forceCandidates, statistics, statisticsKey,
         )
         if (batch.isNotEmpty()) events.offer(batch)
+        if (previous == null || previous.ready != value.ready || previous.schema != value.schema || previous.ascii != value.ascii) {
+            assetPrewarmer.invalidate()
+            requestAssetPrewarm()
+        }
+    }
+
+    private fun requestAssetPrewarm() {
+        if (directBootMode) return
+        assetPrewarmer.request {
+            val value = snapshot
+            if (!started || maintenance || value?.ready != true || value.generation != inputSession ||
+                value.ascii || value.preedit.isNotEmpty() || forwardsKeysDirectly() ||
+                flags.flags and CapabilityFlag.PasswordOrSensitive.flag != 0UL) null
+            else DirectRimeAssetPrewarmer.Assets(config.user, shared, Native.prewarmAssets())
+        }
     }
 
     private fun buildStatusActions(value: Snapshot): Array<Action> = DirectRimeStatusMenu.build(
@@ -429,6 +475,7 @@ class DirectRimeBackend(context: Context) : InputEngine {
     }
 
     override suspend fun sendKey(sym: Int, states: UInt, code: Int, up: Boolean, timestamp: Int) {
+        assetPrewarmer.inputStarted()
         val expected = inputSession
         // Rime can commit on a release too (for example a schema's release binding).
         // Only DOWN produces a key counter, but either half may carry commit metadata.
@@ -482,7 +529,9 @@ class DirectRimeBackend(context: Context) : InputEngine {
         action: Int,
         index: Int,
         candidateContext: CandidateActionContext? = null,
-        tabContext: CandidateTabActionContext? = null
+        tabContext: CandidateTabActionContext? = null,
+        /** Resolved on the owner only after the target was revalidated; null rejects the action. */
+        value: (() -> String?)? = null,
     ): Snapshot? {
         val expected = snapshot ?: return null
         val statisticsSource = if (action == 1 || action == 11) currentCoroutineContext()[InputStatisticsSource] else null
@@ -498,8 +547,9 @@ class DirectRimeBackend(context: Context) : InputEngine {
                     android.util.Log.i("RimeInputTiming", "select_rejected generation=${expected.generation} service_task=${diagnosticTask?.id ?: 0} reason=stale_snapshot")
                 null
             } else {
+                val argument = if (value == null) "" else value() ?: return@onOwner null
                 val ownerAt = if (BuildConfig.INPUT_DIAGNOSTICS) SystemClock.elapsedRealtimeNanos() else 0L
-                val result = act(action, index, statisticsSource = statisticsSource)
+                val result = act(action, index, argument, statisticsSource = statisticsSource)
                 if (action == 1 || action == 11) {
                     bindingSelections++
                     if (BuildConfig.INPUT_DIAGNOSTICS && (bindingSelections <= 2 || SystemClock.elapsedRealtimeNanos() - ownerAt >= 100_000_000L))
@@ -541,12 +591,43 @@ class DirectRimeBackend(context: Context) : InputEngine {
             }
         }.toTypedArray()
     }
-    override suspend fun getCandidateActions(idx: Int) = arrayOf(CandidateAction(0, "忘记此词", false, "", false, false))
-    override suspend fun triggerCandidateAction(idx: Int, actionIdx: Int) { if (actionIdx == 0) performAction(5, idx) }
-    override suspend fun triggerGlobalCandidateAction(idx: Int, actionIdx: Int) { if (actionIdx == 0) performAction(12, idx) }
+    override suspend fun getCandidateActions(idx: Int): Array<CandidateAction> {
+        val sequence = if (idx < 0) emptyList<CandidateAction>() else DirectRimeCandidateSequence.actions(onOwner { sequenceKeys() })
+        return (listOf(DirectRimeCandidateSequence.forgetAction) + sequence).toTypedArray()
+    }
+    override suspend fun triggerCandidateAction(idx: Int, actionIdx: Int) { candidateAction(idx, actionIdx, false, null) }
+    override suspend fun triggerGlobalCandidateAction(idx: Int, actionIdx: Int) { candidateAction(idx, actionIdx, true, null) }
     override suspend fun triggerCandidateActionIfCurrent(
         idx: Int, actionIdx: Int, global: Boolean, expected: CandidateActionContext
-    ): Boolean = idx >= 0 && actionIdx == 0 && performAction(if (global) 12 else 5, idx, expected)?.ready == true
+    ): Boolean = candidateAction(idx, actionIdx, global, expected)
+
+    private suspend fun candidateAction(
+        idx: Int, actionIdx: Int, global: Boolean, expected: CandidateActionContext?
+    ): Boolean {
+        if (actionIdx == DirectRimeCandidateSequence.FORGET_ID) {
+            // The guarded entry point rejects a negative target before touching JNI; the legacy
+            // entry points still reach native, where delete_candidate(_on_current_page) validates it.
+            if (expected != null && idx < 0) return false
+            return performAction(if (global) 12 else 5, idx, expected)?.ready == true
+        }
+        if (idx < 0) return false
+        if (DirectRimeCandidateSequence.operation(actionIdx) == null) return false
+        // The schema's key is read on the owner after admission, so a stale target never reaches JNI.
+        return performAction(if (global) 15 else 14, idx, expected, value = {
+            DirectRimeCandidateSequence.keyArgument(sequenceKeys(), actionIdx)
+        })?.ready == true
+    }
+
+    /** Owner thread only. Empty unless the bound Wanxiang schema loads a manual ordering processor. */
+    private fun sequenceKeys(): Array<String> {
+        val value = snapshot
+        if (!started || maintenance || value?.ready != true || value.generation != inputSession ||
+            !DirectRimeCandidateSequence.isWanxiangSchema(value.schema)) return emptyArray()
+        return try { Native.sequenceKeys() } catch (e: Exception) {
+            Timber.w(e, "Cannot read manual candidate ordering keys")
+            emptyArray()
+        }
+    }
 
     override suspend fun activateSchemaActionIfCurrent(id: Int, expectedInputSession: Long): Boolean = onOwner {
         val index = DirectRimeStatusMenu.schemaIndex(id, schemas.size)
@@ -609,6 +690,7 @@ class DirectRimeBackend(context: Context) : InputEngine {
     override suspend fun setCapFlags(flags: CapabilityFlags) { onOwner {
         this.flags = flags
         val noLearning = directBootMode || flags.flags and CapabilityFlag.PasswordOrSensitive.flag != 0UL
+        if (noLearning) assetPrewarmer.invalidate()
         if (snapshot?.ready == true && appliedNoLearning != noLearning) {
             if (act(8, if (noLearning) 1 else 0, "_no_learning")?.ready == true) appliedNoLearning = noLearning
         }

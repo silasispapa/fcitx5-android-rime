@@ -365,7 +365,7 @@
     <string name="text_keyboard_layout_editing_submode">Bearbeite Layout für Submodus "%1$s"</string>
     <string name="text_keyboard_layout_editing_default">Bearbeite Standard-Layout für "%1$s"</string>
     <string name="font_size">Schriftgröße</string>
-    <string name="font_size_value">%1$d sp</string>
+    <string name="font_size_value">%1$s sp</string>
     <string name="font_size_editor_title">%1$s - Schriftgröße</string>
     <string name="font_size_editor_hint">Ziehen, um Schriftgröße anzupassen (%1$d–%2$d sp)</string>
     <string name="candidates_orientation">Ausrichtung der Kandidatenliste</string>
@@ -375,10 +375,12 @@
     <string name="vertical_reversed">Vertikal (umgekehrt)</string>
     <string name="always">Immer</string>
     <string name="candidates_position">Position des Kandidatenfensters</string>
+    <string name="physical_keyboard_candidates_position">Kandidatenfensterposition bei physischer Tastatur</string>
     <string name="top_left">Oben links</string>
     <string name="top_right">Oben rechts</string>
     <string name="bottom_left">Unten links</string>
     <string name="bottom_right">Unten rechts</string>
+    <string name="follow_cursor">Cursor folgen</string>
     <string name="candidates_font_size">Schriftgröße Kandidaten</string>
     <string name="candidates_padding">Abstand Kandidaten</string>
     <string name="candidate_highlight_radius">Eckradius Kandidaten-Hervorhebung</string>
@@ -508,7 +510,7 @@
     <string name="monet_editor_select_color_resource">Farbressource auswählen</string>
     <string name="monet_editor_select">Auswählen</string>
     <string name="monet_editor_color_mapping_title">Farbzuordnung</string>
-    <string name="monet_editor_description">Ordnen Sie jede Themenfarbe einer Material You dynamischen Farbressource zu. Änderungen werden automatisch gespeichert und angewendet.</string>
+    <string name="monet_editor_description">Ordnen Sie jede Themenfarbe einer Material You dynamischen Farbressource zu. Tippen Sie auf ✓, um zu speichern und anzuwenden; ohne ✓ werden Änderungen verworfen.</string>
     <string name="edit_monet_theme">Monet-Theme bearbeiten</string>
 
     <string name="text_keyboard_layout_add_submode">Submodus-Layout hinzufügen</string>
@@ -682,6 +684,8 @@
     <string name="theme_message_follow_system_day_night_mode_enabled">„Systemweiten Tag-/Nachtmodus folgen“ ist aktiviert, Theme kann nicht manuell gewechselt werden.</string>
     <string name="theme_migrated">Theme wurde auf die aktuelle Version migriert</string>
     <string name="toolbar_num_row_on_password">In der Werkzeugleiste bei Passwortfeldern Zahlenreihe anzeigen</string>
+    <string name="allow_ime_in_password_fields">Eingabemethode in Passwortfeldern zulassen</string>
+    <string name="allow_ime_in_password_fields_summary">Auch Passwortfelder mit Rime verarbeiten. Wortlernen, Eingabestatistik und Spracheingabe bleiben bei der Eingabe in Passwortfeldern deaktiviert.</string>
     <string name="remove_from_favorites">Aus Favoriten entfernen</string>
     <string name="update_table">Tabelle aktualisieren</string>
     <string name="update_storage_permission_denied">Speicherberechtigung verweigert</string>

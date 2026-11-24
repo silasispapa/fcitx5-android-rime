@@ -49,6 +49,7 @@ import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.CapabilityFlags
 import org.fcitx.fcitx5.android.core.FcitxEvent
 import org.fcitx.fcitx5.android.daemon.FcitxConnection
+import org.fcitx.fcitx5.android.daemon.FcitxDaemon
 import org.fcitx.fcitx5.android.daemon.launchOnReady
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.data.prefs.SplitKeyboardStateManager
@@ -97,7 +98,7 @@ import androidx.constraintlayout.widget.ConstraintLayout
 import org.fcitx.fcitx5.android.input.wm.InputWindowManager
 import org.fcitx.fcitx5.android.utils.unset
 import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesMode
-import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesVirtualKeyboardPosition
+import org.fcitx.fcitx5.android.input.candidates.floating.FloatingCandidatesPosition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -2306,6 +2307,7 @@ class InputView(
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) FcitxDaemon.onKeyboardTouchStarted()
         if (autoHideFloatingMoveHandlePref != lastAutoHideFloatingMoveHandlePref) {
             updateFloatingHandlesVisibility()
         }
@@ -4166,8 +4168,13 @@ class InputView(
         keyboardView.getLocationInWindow(keyboardLoc)
 
         when (position) {
-            FloatingCandidatesVirtualKeyboardPosition.TopLeft,
-            FloatingCandidatesVirtualKeyboardPosition.TopRight -> {
+            // A posted position update can race with candidate visibility. Keep
+            // the external aux bar hidden while the cursor-following window is visible.
+            FloatingCandidatesPosition.Default,
+            FloatingCandidatesPosition.FollowCursor ->
+                scrollView.visibility = View.GONE
+            FloatingCandidatesPosition.TopLeft,
+            FloatingCandidatesPosition.TopRight -> {
                 val cvBottomInInput = cvLoc[1] + cv.height - inputLoc[1]
                 val keyboardTopInInput = keyboardLoc[1] - inputLoc[1]
                 val availableHeight = keyboardTopInInput - cvBottomInInput
@@ -4187,8 +4194,8 @@ class InputView(
                     scrollView.requestLayout()
                 }
             }
-            FloatingCandidatesVirtualKeyboardPosition.BottomLeft,
-            FloatingCandidatesVirtualKeyboardPosition.BottomRight -> {
+            FloatingCandidatesPosition.BottomLeft,
+            FloatingCandidatesPosition.BottomRight -> {
                 val cvTopInInput = cvLoc[1] - inputLoc[1]
                 val availableHeight = cvTopInInput.coerceAtLeast(0)
                 if (availableHeight < auxBarSingleRowMinHeight) {
