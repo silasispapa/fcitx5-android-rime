@@ -526,6 +526,9 @@
     <string name="table_dict_replace_message">码表词典 \"%1$s\" 已存在。您可以导入新词典并替换它。</string>
     <string name="_cannot_be_empty">%1$s不能为空</string>
     <string name="clipboard_mask_sensitive">隐藏敏感信息（如密码）</string>
+    <string name="clipboard_extract_url">从复制的文字中提取网址</string>
+    <string name="clipboard_extract_email">从复制的文字中提取电邮地址</string>
+    <string name="clipboard_extract_summary">每项另存为一条剪贴板记录</string>
     <string name="open_rime_user_data_dir">即将打开应用数据目录。RIME 用户数据目录位于“data”下，并取决于当前目录配置。</string>
     <string name="generic_multiselect_min">至少需要选择 %1$d 项。</string>
     <string name="space_swipe_move_cursor">划动空格键以移动光标</string>

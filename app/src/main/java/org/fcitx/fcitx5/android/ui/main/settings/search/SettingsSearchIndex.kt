@@ -222,6 +222,8 @@ object SettingsSearchIndex {
         R.string.clipboard_limit_local to "clipboard_limit_local",
         R.string.clipboard_suggestion to "clipboard_suggestion",
         R.string.clipboard_mask_sensitive to "clipboard_mask_sensitive",
+        R.string.clipboard_extract_url to "clipboard_extract_url",
+        R.string.clipboard_extract_email to "clipboard_extract_email",
         R.string.clipboard_return_after_paste to "clipboard_return_after_paste",
         R.string.clipboard_limit_remote to "clipboard_limit_remote",
         R.string.clipboard_limit_media to "clipboard_limit_media",
@@ -967,6 +969,16 @@ object SettingsSearchIndex {
         SettingsSearchEntry(
             R.string.clipboard_mask_sensitive, P_ANDROID,
             listOf("sensitive", "敏感", "mingan", "隐私", "密码"),
+            route = SettingsRoute.Clipboard
+        ),
+        SettingsSearchEntry(
+            R.string.clipboard_extract_url, P_ANDROID,
+            listOf("url", "link", "网址", "链接", "提取"),
+            route = SettingsRoute.Clipboard
+        ),
+        SettingsSearchEntry(
+            R.string.clipboard_extract_email, P_ANDROID,
+            listOf("email", "mail", "电邮", "邮箱", "提取"),
             route = SettingsRoute.Clipboard
         ),
         SettingsSearchEntry(

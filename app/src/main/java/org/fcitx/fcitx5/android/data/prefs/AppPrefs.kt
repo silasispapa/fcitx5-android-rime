@@ -702,6 +702,14 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         val clipboardMaskSensitive = switch(
             R.string.clipboard_mask_sensitive, "clipboard_mask_sensitive", true
         ) { clipboardListening.getValue() }
+        val clipboardExtractUrl = switch(
+            R.string.clipboard_extract_url, "clipboard_extract_url", false,
+            R.string.clipboard_extract_summary
+        ) { clipboardListening.getValue() }
+        val clipboardExtractEmail = switch(
+            R.string.clipboard_extract_email, "clipboard_extract_email", false,
+            R.string.clipboard_extract_summary
+        ) { clipboardListening.getValue() }
     }
 
     inner class Symbols : ManagedPreferenceCategory(R.string.emoji_and_symbols, sharedPreferences) {

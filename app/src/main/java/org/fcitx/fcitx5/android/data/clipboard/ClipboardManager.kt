@@ -92,6 +92,8 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
     private val localLimitPref = AppPrefs.getInstance().clipboard.clipboardHistoryLimitLocal
     private val remoteLimitPref = AppPrefs.getInstance().clipboard.clipboardHistoryLimitRemote
     private val mediaLimitPref = AppPrefs.getInstance().clipboard.clipboardHistoryLimitMedia
+    private val extractUrlPref = AppPrefs.getInstance().clipboard.clipboardExtractUrl
+    private val extractEmailPref = AppPrefs.getInstance().clipboard.clipboardExtractEmail
 
     @Keep
     private val limitListener = ManagedPreference.OnChangeListener<Int> { _, _ ->
@@ -721,8 +723,33 @@ object ClipboardManager : ClipboardManager.OnPrimaryClipChangedListener,
                     val filtered = HostClipboardFilter.transform(raw)
                     transformer?.invoke(filtered) ?: filtered
                 } ?: return@withLock
+                insertExtractedEntries(entry)
                 insertOrUpdateEntry(entry, notifyListeners = true)
             }
+        }
+    }
+
+    /**
+     * 按设置从文字条目中提取网址／电邮，各存为一条。时间戳略早于原条目，
+     * 使整段文字仍排在最前且仍是 [lastEntry]；敏感内容与媒体不提取。
+     */
+    private suspend fun insertExtractedEntries(entry: ClipboardEntry) {
+        if (entry.sensitive || entry.isUriEntry() || entry.type.startsWith("image/")) return
+        val parts = ClipboardTextExtractor.extract(
+            entry.text,
+            urls = extractUrlPref.getValue(),
+            emails = extractEmailPref.getValue()
+        )
+        parts.forEachIndexed { index, text ->
+            insertOrUpdateEntry(
+                ClipboardEntry(
+                    text = text,
+                    timestamp = entry.timestamp - 1 - index,
+                    source = entry.source,
+                    originalRootUri = entry.originalRootUri
+                ),
+                notifyListeners = false
+            )
         }
     }
 

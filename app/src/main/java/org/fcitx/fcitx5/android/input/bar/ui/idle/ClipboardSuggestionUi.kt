@@ -24,7 +24,6 @@ import splitties.views.dsl.constraintlayout.matchConstraints
 import splitties.views.dsl.constraintlayout.startOfParent
 import splitties.views.dsl.core.Ui
 import splitties.views.dsl.core.add
-import splitties.views.dsl.core.horizontalLayout
 import splitties.views.dsl.core.imageView
 import splitties.views.dsl.core.lParams
 import splitties.views.dsl.core.matchParent
@@ -79,46 +78,8 @@ class ClipboardSuggestionUi(override val ctx: Context, private val theme: Theme)
         background = rippleDrawable(theme.keyPressHighlightColor)
     }
 
-    private val linkIcon = imageView {
-        imageDrawable = drawable(R.drawable.ic_baseline_link_24)!!.apply {
-            setTint(theme.altKeyTextColor)
-        }
-    }
-
-    /** 复制的文字里提取出的网址，点按只上屏网址。 */
-    val linkText = textView {
-        isSingleLine = true
-        maxWidth = dp(120)
-        ellipsize = TextUtils.TruncateAt.MIDDLE
-        setTextColor(theme.altKeyTextColor)
-    }
-
-    private val linkLayout = constraintLayout {
-        val spacing = dp(4)
-        add(linkIcon, lParams(dp(20), dp(20)) {
-            startOfParent(spacing)
-            centerVertically()
-        })
-        add(linkText, lParams(wrapContent, wrapContent) {
-            after(linkIcon, spacing)
-            endOfParent(spacing)
-            centerVertically()
-        })
-    }
-
-    val linkView = CustomGestureView(ctx).apply {
-        visibility = View.GONE
-        add(linkLayout, lParams(wrapContent, matchParent))
-        background = rippleDrawable(theme.keyPressHighlightColor)
-    }
-
-    private val chips = horizontalLayout {
-        add(suggestionView, lParams(wrapContent, matchParent))
-        add(linkView, lParams(wrapContent, matchParent) { marginStart = dp(8) })
-    }
-
     override val root = constraintLayout {
-        add(chips, lParams(wrapContent, matchConstraints) {
+        add(suggestionView, lParams(wrapContent, matchConstraints) {
             centerInParent()
             verticalMargin = dp(4)
         })
