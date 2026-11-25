@@ -89,10 +89,16 @@ internal class JsVoiceInputProvider(
     private inner class Session(val target: IVoiceInputCallback, val rate: Int) {
         val taskId = UUID.randomUUID().toString()
         val queue = JsVoiceCommandQueue(rate)
+        /** 把宿主的分片对齐到 3 字节，保证插件拼出的 base64 始终合法，见 [JsVoicePcmAligner]。 */
+        val pcm = JsVoicePcmAligner()
         private val ended = AtomicBoolean(false)
         var worker: Job? = null
         val policy = JsVoiceNetworkPolicy(pluginId, declaredHosts)
         val net = JsVoiceNet(http, policy, ::offer) { field -> JsVoiceSettingsStore.secret(pluginId, field) }
+        // 服务授权在本会话内固定：候选目录、用户选择、以及由此算出的可调用集合。
+        val services = JsVoiceServiceBinding(pluginId, locale, http) { id, field ->
+            JsVoiceSettingsStore.secret(id, field)
+        }
         val current get() = !ended.get() && activeSession === this
         val callback = object : IVoiceInputCallback.Stub() {
             override fun onReady() { if (current) target.onReady() }
@@ -177,7 +183,7 @@ internal class JsVoiceInputProvider(
             // Check before executing top-level script code, including native calls.
             session.policy.requireApproval()
             val js = JsVoiceRuntime.create().also { runtime = it }
-            net.install(js, locale)
+            net.install(js, locale, session.services)
             JsVoiceRuntime.initialize(js, JsVoicePrelude.SOURCE + "\n" + scriptSource())
             val undeclared = undeclaredHosts(js)
             if (undeclared.isNotEmpty()) {
@@ -191,6 +197,9 @@ internal class JsVoiceInputProvider(
             }
             val fields = describeFields(js, locale)
             val values = JsVoiceFields.currentValues(fields, JsVoiceSettingsStore.values(pluginId))
+            // start() 里就会查服务目录（新版插件在握手前解析翻译提供方），所以必须在调用 start 前
+            // 把目录与授权算好；目录本身有进程内缓存，重复开会话不会反复求值所有脚本。
+            session.services.update(fields, values, JsVoiceServices.catalog(locale, excludePluginId = pluginId))
             // 只要求**当前可见**的密钥。豆包插件按 authMode 在 apiKey 与 accessToken 之间二选一，
             // 若把 hide 着的那一个也算成必填，用户永远启动不了会话。
             val missing = fields.firstOrNull {
@@ -220,26 +229,42 @@ internal class JsVoiceInputProvider(
             if (handle(cb, started.actions)) return
             while (session.current) {
                 val cmd = session.queue.receive()
-                val finished = when (cmd) {
-                    is JsVoiceCommand.Audio -> handle(cb, call(js, "audio", buildJsonObject {
-                        settings.forEach { (key, value) -> put(key, value) }
-                        put("pcm", Base64.encodeToString(cmd.pcm, Base64.NO_WRAP))
-                        put("socket", socket)
-                    }, AUDIO_TIMEOUT_MS).actions)
-                    JsVoiceCommand.Stop -> handle(cb, call(js, "stop", buildJsonObject {
-                        settings.forEach { (key, value) -> put(key, value) }
-                        put("socket", socket)
-                    }, STOP_TIMEOUT_MS).actions)
-                    is JsVoiceCommand.Message -> handle(cb, call(js, "onMessage", buildJsonObject {
-                        put("socket", cmd.socket)
-                        // 两个键分开给：插件按 message.message 读文本帧、按 message.binaryBase64 读二进制帧，
-                        // 混在一起会让文本协议误把 base64 当 JSON 去 parse。
-                        if (cmd.binaryBase64 != null) put("binaryBase64", cmd.binaryBase64)
-                        else put("message", cmd.text)
-                    }, MESSAGE_TIMEOUT_MS).actions)
+                var finished = false
+                when (cmd) {
+                    is JsVoiceCommand.Audio -> {
+                        // 插件可能把每个分片的 base64 直接拼起来（qwen-asr 的 flash 模式就是
+                        // state.chunks.join("")）；带 '=' 填充的分片一旦拼接就是非法 base64，所以先把
+                        // PCM 对齐到 3 字节的整数倍再投递。不足 3 字节的尾巴在 stop 前补投。
+                        val pcm = session.pcm.take(cmd.pcm) ?: continue
+                        finished = handle(cb, call(js, "audio", audioArg(settings, socket, pcm), AUDIO_TIMEOUT_MS).actions)
+                    }
+                    JsVoiceCommand.Stop -> {
+                        session.pcm.flush()?.let { tail ->
+                            finished = handle(
+                                cb,
+                                call(js, "audio", audioArg(settings, socket, tail), AUDIO_TIMEOUT_MS).actions,
+                            )
+                        }
+                        if (!finished) {
+                            val stopArg = buildJsonObject {
+                                settings.forEach { (key, value) -> put(key, value) }
+                                put("socket", socket)
+                            }
+                            finished = handle(cb, call(js, "stop", stopArg, STOP_TIMEOUT_MS).actions)
+                        }
+                    }
+                    is JsVoiceCommand.Message -> {
+                        finished = handle(cb, call(js, "onMessage", buildJsonObject {
+                            put("socket", cmd.socket)
+                            // 两个键分开给：插件按 message.message 读文本帧、按 message.binaryBase64 读二进制帧，
+                            // 混在一起会让文本协议误把 base64 当 JSON 去 parse。
+                            if (cmd.binaryBase64 != null) put("binaryBase64", cmd.binaryBase64)
+                            else put("message", cmd.text)
+                        }, MESSAGE_TIMEOUT_MS).actions)
+                    }
                     is JsVoiceCommand.Fail -> {
                         cb.onError(VoiceInputIpc.ErrorCodes.UNKNOWN, cmd.message)
-                        true
+                        finished = true
                     }
                 }
                 if (finished) break
@@ -286,6 +311,13 @@ internal class JsVoiceInputProvider(
         return JsVoiceFields.parse(raw)
     }
 
+    /** 每个 audio() 调用都重新下发整份设置，理由同 start()：脚本可能在不同回调里读同一个键。 */
+    private fun audioArg(settings: JsonObject, socket: String, pcm: ByteArray) = buildJsonObject {
+        settings.forEach { (key, value) -> put(key, value) }
+        put("pcm", Base64.encodeToString(pcm, Base64.NO_WRAP))
+        put("socket", socket)
+    }
+
     /** Maps action objects to callback events. Returns true when the session is over. */
     private fun handle(cb: IVoiceInputCallback, actions: List<JsonObject>): Boolean {
         var ended = false
@@ -315,8 +347,42 @@ internal class JsVoiceInputProvider(
 
         private const val START_TIMEOUT_MS = 10_000L
         private const val AUDIO_TIMEOUT_MS = 3_000L
-        private const val MESSAGE_TIMEOUT_MS = 5_000L
+
+        /**
+         * onMessage 现在承担「最终句翻译」：识别结果落定后脚本会同步等待一次服务调用，
+         * 而服务调用本身是一次 HTTPS。Foxy 新版给 onMessage 的预算就是 30s，
+         * 按原来的 5s 会在翻译返回前判超时，用户看到的是「识别失败」。
+         */
+        private const val MESSAGE_TIMEOUT_MS = 30_000L
         private const val STOP_TIMEOUT_MS = 35_000L
+    }
+}
+
+/**
+ * 把宿主的分片对齐到 3 字节（PCM 16bit 单声道一个采样 = 2 字节，3 字节就是 base64 的 4 字符倍数）。
+ *
+ * 为什么要对齐：qwen-asr 的 flash 模式把每个分片的 base64 直接 `chunks.join("")` 后当整段音频解码，
+ * 而 base64 分片各自带 `=` 填充。100ms @16kHz 是 3200 字节，base64 长度 4268（含一个 `=`），
+ * 拼接后中间出现 `=`，解码器直接抛 "Input byte array has incorrect ending byte"。
+ * 只发 3 字节整数倍也顺带保证切在采样边界上，不会把 16bit 样本劈成两半。
+ */
+internal class JsVoicePcmAligner {
+    private var pending = ByteArray(0)
+
+    /** 返回可以直接投递给插件的 PCM；不足一次 base64 边界时返回 null 并缓存到下一片。 */
+    fun take(pcm: ByteArray): ByteArray? {
+        if (pending.isEmpty() && pcm.size % 3 == 0) return pcm
+        val joined = pending + pcm
+        val usable = joined.size - joined.size % 3
+        pending = joined.copyOfRange(usable, joined.size)
+        return if (usable == 0) null else joined.copyOfRange(0, usable)
+    }
+
+    /** stop 前补齐尾巴；长度可能带 `=` 填充，但它是最后一段，不会再被拼接。 */
+    fun flush(): ByteArray? {
+        val tail = pending
+        pending = ByteArray(0)
+        return if (tail.isEmpty()) null else tail
     }
 }
 
@@ -341,6 +407,9 @@ internal object JsVoiceStubNatives {
         js.function("__n_wsClose") { null }
         js.function("__n_httpPost") { throw IllegalStateException("network is not available here") }
         js.function("__n_appSleep") { throw IllegalStateException("App delay is not available here") }
+        // 服务目录在设置页与 describe 会话里同样要能读：ui.serviceSelect 的渲染依赖它。
+        js.function("__n_servicesCatalog") { "[]" }
+        js.function("__n_serviceCall") { throw IllegalStateException("Service calls are not available here") }
         js.function("__n_hmacSha1Base64") { throw IllegalStateException("signing is not available here") }
         js.function("__n_concatBase64") { args -> binary.concatenate(text(args, 0)) }
         js.function("__n_wavBase64") { args ->
@@ -420,9 +489,14 @@ internal class JsVoiceNet(
         },
     )
 
-    fun install(js: QuickJs, locale: String) {
+    fun install(js: QuickJs, locale: String, services: JsVoiceServiceBinding? = null) {
         js.function("__n_hostSession") { JsHostSession.VOICE.wireName }
         js.function("__n_locale") { _ -> locale }
+        js.function("__n_servicesCatalog") { services?.catalogJson() ?: "[]" }
+        js.asyncFunction("__n_serviceCall") { args ->
+            services?.call(text(args, 0), text(args, 1), text(args, 2), text(args, 3))
+                ?: throw IllegalStateException("Service calls are not available here")
+        }
         js.function("__n_hmacSha1Base64") { args ->
             policy.requireApproval()
             encode(JsVoiceCrypto.hmacSha1(text(args, 0), text(args, 1), secretFor))
